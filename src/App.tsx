@@ -1,12 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { SentenceClip } from "./types";
 import {
-  getAudioContext,
   decodeAudioFile,
   extractWaveformPeaks,
   detectPauseSegments,
-  generateSyntheticAudioBuffer,
-  formatTime,
   audioBufferToBase64Wav,
 } from "./utils/audioUtils";
 import { WaveformDisplay } from "./components/WaveformDisplay";
@@ -14,33 +11,6 @@ import { AudioControlBar } from "./components/AudioControlBar";
 import { SentenceList } from "./components/SentenceList";
 import { TranscriptUploader } from "./components/TranscriptUploader";
 import { UploadCloud } from "lucide-react";
-
-const INITIAL_DEMO_SENTENCES = [
-  {
-    startTime: 0.5,
-    endTime: 4.8,
-    frenchText: "Je vis actuellement à Toronto, où je me suis installé pour mes études.",
-    englishTranslation: "I currently live in Toronto, where I settled for my studies.",
-  },
-  {
-    startTime: 5.2,
-    endTime: 9.6,
-    frenchText: "C'est une ville dynamique et multiculturelle que j'apprécie énormément.",
-    englishTranslation: "It's a vibrant and multicultural city that I really enjoy.",
-  },
-  {
-    startTime: 10.1,
-    endTime: 15.2,
-    frenchText: "Chaque matin, je prends un café dans un petit bistro du quartier.",
-    englishTranslation: "Every morning, I grab a coffee at a small neighborhood bistro.",
-  },
-  {
-    startTime: 15.8,
-    endTime: 21.0,
-    frenchText: "L'apprentissage d'une langue demande de la constance et de la pratique audio.",
-    englishTranslation: "Learning a language requires consistency and audio practice.",
-  },
-];
 
 export default function App() {
   // Audio state
@@ -66,93 +36,152 @@ export default function App() {
   // Loading & STT states
   const [isTranscribingSTT, setIsTranscribingSTT] = useState<boolean>(false);
 
-  // Audio Node Refs for Web Audio API
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
-  const gainNodeRef = useRef<GainNode | null>(null);
-  const startTimeRef = useRef<number>(0);
-  const startOffsetRef = useRef<number>(0);
+  // Pitch-preserving HTMLAudioElement transport (keeps AudioBuffer for analysis only)
+  const audioElRef = useRef<HTMLAudioElement | null>(null);
+  const objectUrlRef = useRef<string | null>(null);
   const animFrameRef = useRef<number | null>(null);
+  const durationRef = useRef<number>(duration);
+  const playbackRateRef = useRef<number>(playbackRate);
+  const volumeRef = useRef<number>(volume);
+  const sliceRangeRef = useRef<{ start: number; end: number }>({ start: 0.5, end: 4.8 });
+  const isPlayingRef = useRef<boolean>(false);
 
-  // CRITICAL BUG FIX: Real-time ref for looping state during playback
   const isLoopingRef = useRef<boolean>(isLooping);
   useEffect(() => {
     isLoopingRef.current = isLooping;
   }, [isLooping]);
 
-  // Stop Web Audio playback safely
+  useEffect(() => {
+    durationRef.current = duration;
+  }, [duration]);
+
+  useEffect(() => {
+    playbackRateRef.current = playbackRate;
+  }, [playbackRate]);
+
+  useEffect(() => {
+    volumeRef.current = volume;
+  }, [volume]);
+
+  // Create persistent audio element; revoke object URLs on unmount
+  useEffect(() => {
+    const el = new Audio();
+    el.preload = "auto";
+    audioElRef.current = el;
+    return () => {
+      el.pause();
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+      }
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = null;
+      }
+      audioElRef.current = null;
+    };
+  }, []);
+
   const stopAudio = useCallback(() => {
-    if (sourceNodeRef.current) {
-      try {
-        sourceNodeRef.current.stop();
-        sourceNodeRef.current.disconnect();
-      } catch (e) {}
-      sourceNodeRef.current = null;
-    }
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
       animFrameRef.current = null;
     }
+    const el = audioElRef.current;
+    if (el && !el.paused) {
+      el.pause();
+    }
+    isPlayingRef.current = false;
     setIsPlaying(false);
   }, []);
 
   const playAudioRange = useCallback(
     (startSec: number, endSec: number) => {
-      stopAudio();
+      const el = audioElRef.current;
+      if (!el || !el.src) return;
 
-      if (!audioBuffer) return;
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
 
-      const ctx = getAudioContext();
-      audioCtxRef.current = ctx;
+      const mediaDuration =
+        Number.isFinite(el.duration) && el.duration > 0
+          ? el.duration
+          : durationRef.current || Number.POSITIVE_INFINITY;
+      const clampedStart = Math.max(0, Math.min(startSec, mediaDuration));
+      const clampedEnd = Math.max(clampedStart + 0.05, Math.min(endSec, mediaDuration));
+      sliceRangeRef.current = { start: clampedStart, end: clampedEnd };
 
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.playbackRate.value = playbackRate;
+      el.playbackRate = playbackRateRef.current;
+      el.volume = volumeRef.current;
 
-      const gain = ctx.createGain();
-      gain.gain.value = volume;
+      const beginMonitor = () => {
+        const updateLoop = () => {
+          if (!isPlayingRef.current || !audioElRef.current) return;
 
-      source.connect(gain);
-      gain.connect(ctx.destination);
+          const currentPos = audioElRef.current.currentTime;
+          setCurrentTime(currentPos);
 
-      sourceNodeRef.current = source;
-      gainNodeRef.current = gain;
-
-      const clampedStart = Math.max(0, Math.min(startSec, audioBuffer.duration));
-      startOffsetRef.current = clampedStart;
-      startTimeRef.current = ctx.currentTime;
-
-      source.start(0, clampedStart);
-      setIsPlaying(true);
-
-      // Smooth playback loop & time monitor
-      const updateLoop = () => {
-        if (!sourceNodeRef.current || ctx.state === "closed") return;
-
-        const elapsed = (ctx.currentTime - startTimeRef.current) * playbackRate;
-        const currentPos = startOffsetRef.current + elapsed;
-        setCurrentTime(currentPos);
-
-        // Check if reached end of slice
-        if (currentPos >= endSec) {
-          // Check LIVE ref value so toggling loop OFF immediately stops playback!
-          if (isLoopingRef.current) {
-            playAudioRange(startSec, endSec);
-            return;
-          } else {
+          if (currentPos >= sliceRangeRef.current.end - 0.02) {
+            if (isLoopingRef.current) {
+              const audio = audioElRef.current;
+              audio.currentTime = sliceRangeRef.current.start;
+              setCurrentTime(sliceRangeRef.current.start);
+              if (audio.paused) {
+                audio.play().catch(() => {
+                  stopAudio();
+                });
+              }
+              animFrameRef.current = requestAnimationFrame(updateLoop);
+              return;
+            }
             stopAudio();
-            setCurrentTime(endSec);
+            setCurrentTime(sliceRangeRef.current.end);
             return;
           }
-        }
 
+          animFrameRef.current = requestAnimationFrame(updateLoop);
+        };
         animFrameRef.current = requestAnimationFrame(updateLoop);
       };
 
-      animFrameRef.current = requestAnimationFrame(updateLoop);
+      const startPlayback = () => {
+        el.currentTime = clampedStart;
+        setCurrentTime(clampedStart);
+        isPlayingRef.current = true;
+        setIsPlaying(true);
+        el.play()
+          .then(() => beginMonitor())
+          .catch(() => {
+            isPlayingRef.current = false;
+            setIsPlaying(false);
+          });
+      };
+
+      if (el.readyState >= 1) {
+        startPlayback();
+      } else {
+        el.addEventListener("loadedmetadata", startPlayback, { once: true });
+      }
     },
-    [audioBuffer, playbackRate, volume, stopAudio]
+    [stopAudio]
   );
+
+  const handleChangeSpeed = (speed: number) => {
+    playbackRateRef.current = speed;
+    setPlaybackRate(speed);
+    if (audioElRef.current) {
+      audioElRef.current.playbackRate = speed;
+    }
+  };
+
+  const handleChangeVolume = (vol: number) => {
+    volumeRef.current = vol;
+    setVolume(vol);
+    if (audioElRef.current) {
+      audioElRef.current.volume = vol;
+    }
+  };
 
   // Handle Play/Pause
   const handlePlayPause = () => {
@@ -208,6 +237,21 @@ export default function App() {
   const handleAudioFileUpload = async (file: File) => {
     stopAudio();
     try {
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = null;
+      }
+
+      const objectUrl = URL.createObjectURL(file);
+      objectUrlRef.current = objectUrl;
+      const el = audioElRef.current;
+      if (el) {
+        el.src = objectUrl;
+        el.load();
+        el.playbackRate = playbackRateRef.current;
+        el.volume = volumeRef.current;
+      }
+
       const decodedBuffer = await decodeAudioFile(file);
       setAudioBuffer(decodedBuffer);
       setDuration(decodedBuffer.duration);
@@ -664,8 +708,8 @@ export default function App() {
             onPlayPause={handlePlayPause}
             onStop={stopAudio}
             onToggleLoop={() => setIsLooping(!isLooping)}
-            onChangeSpeed={setPlaybackRate}
-            onChangeVolume={setVolume}
+            onChangeSpeed={handleChangeSpeed}
+            onChangeVolume={handleChangeVolume}
             onAutoSegment={handleAutoAlignSentences}
             onPrevSentence={handlePrevSentence}
             onNextSentence={handleNextSentence}
