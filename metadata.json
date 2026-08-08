@@ -1,0 +1,6 @@
+{
+  "name": "French Audio Sentence Learner",
+  "description": "Learn French sentence by sentence through audio breakdown, interactive waveform slicer, loop practice, and transcript synchronization.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
