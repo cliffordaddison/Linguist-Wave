@@ -10,7 +10,7 @@ Upload a recording, cut it into phrases on an interactive waveform, then practic
 
 ```
   ┌─────────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────────────┐
-  │  1. Upload  │ ──▶ │  2. Slice    │ ──▶ │  3. Loop    │ ──▶ │  4. Shadow   │
+  │  1. Upload  │ ──▶│  2. Slice    │ ──▶ │  3. Loop    │ ──▶│  4. Shadow   │
   │    audio    │     │  sentences   │     │  & listen   │     │  & speak     │
   └─────────────┘     └──────────────┘     └─────────────┘     └──────────────┘
 ```
