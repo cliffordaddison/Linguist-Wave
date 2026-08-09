@@ -132,7 +132,7 @@ export const SentenceList: React.FC<SentenceListProps> = ({
           {/* Master French Transcript Toggle */}
           <button
             onClick={handleMasterFrenchToggle}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-semibold border transition-all ${
+            className={`flex items-center gap-1.5 min-h-9 px-2.5 py-1.5 rounded text-[11px] font-semibold border transition-all ${
               allFrenchState
                 ? "bg-white/10 border-white/20 text-white"
                 : "bg-[#D4AF37]/10 border-[#D4AF37]/30 text-[#D4AF37]"
@@ -145,7 +145,7 @@ export const SentenceList: React.FC<SentenceListProps> = ({
           {/* Master English Translation Toggle */}
           <button
             onClick={handleMasterEnglishToggle}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-semibold border transition-all ${
+            className={`flex items-center gap-1.5 min-h-9 px-2.5 py-1.5 rounded text-[11px] font-semibold border transition-all ${
               allEnglishState
                 ? "bg-white/10 border-white/20 text-white"
                 : "bg-white/5 border-white/10 text-white/40"
@@ -158,7 +158,7 @@ export const SentenceList: React.FC<SentenceListProps> = ({
           {/* Add Sentence Clip */}
           <button
             onClick={onAddSentence}
-            className="flex items-center gap-1 px-2.5 py-1 bg-[#0A0A0B] border border-white/10 hover:bg-white/10 text-white/80 rounded text-[11px] font-medium transition-colors"
+            className="flex items-center gap-1 min-h-9 px-2.5 py-1.5 bg-[#0A0A0B] border border-white/10 hover:bg-white/10 text-white/80 rounded text-[11px] font-medium transition-colors"
           >
             <Plus className="w-3 h-3" /> Add Clip
           </button>
@@ -168,8 +168,8 @@ export const SentenceList: React.FC<SentenceListProps> = ({
       {/* ACTIVE SENTENCE PINNED SPOTLIGHT (ALWAYS SHOWING AT TOP) */}
       {activeClip && activeSentenceIndex !== null && (
         <div className="bg-[#1A1A1E] border-2 border-[#D4AF37]/60 rounded-xl p-3.5 shadow-2xl relative space-y-2.5 shrink-0">
-          <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
-            <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-2.5">
+            <div className="flex flex-wrap items-center gap-2.5">
               <span className="px-2.5 py-0.5 rounded bg-[#D4AF37] text-black text-xs font-bold font-mono">
                 Active Clip #{activeSentenceIndex + 1}
               </span>
@@ -196,9 +196,9 @@ export const SentenceList: React.FC<SentenceListProps> = ({
                       onUpdateSentenceBounds(activeSentenceIndex, parseFloat(editTimes.start), parseFloat(editTimes.end));
                       setEditingIndex(null);
                     }}
-                    className="p-1 bg-[#D4AF37] text-black rounded hover:bg-[#e2c154]"
+                    className="min-w-9 min-h-9 p-2 bg-[#D4AF37] text-black rounded hover:bg-[#e2c154] flex items-center justify-center"
                   >
-                    <Check className="w-3 h-3" />
+                    <Check className="w-3.5 h-3.5" />
                   </button>
                 </div>
               ) : (
@@ -212,7 +212,7 @@ export const SentenceList: React.FC<SentenceListProps> = ({
                       setEditingIndex(activeSentenceIndex);
                       setEditTimes({ start: activeClip.startTime.toString(), end: activeClip.endTime.toString() });
                     }}
-                    className="ml-1 text-white/30 hover:text-[#D4AF37]"
+                    className="ml-1 min-w-9 min-h-9 p-2 text-white/30 hover:text-[#D4AF37] flex items-center justify-center"
                     title="Fine-tune start and end bounds"
                   >
                     <Edit3 className="w-3.5 h-3.5" />
@@ -230,7 +230,7 @@ export const SentenceList: React.FC<SentenceListProps> = ({
             <div className="flex items-center gap-1.5">
               <button
                 onClick={() => onSelectSentence(activeSentenceIndex, true)}
-                className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs font-bold uppercase tracking-wider transition-all ${
+                className={`flex items-center gap-1.5 min-h-10 px-3 py-2 rounded text-xs font-bold uppercase tracking-wider transition-all ${
                   isPlaying ? "bg-[#D4AF37] text-black" : "bg-white/10 hover:bg-[#D4AF37] hover:text-black text-white"
                 }`}
               >
@@ -240,18 +240,18 @@ export const SentenceList: React.FC<SentenceListProps> = ({
 
               <button
                 onClick={() => onToggleFrench(activeSentenceIndex)}
-                className="p-1.5 rounded bg-[#0A0A0B] border border-white/10 text-white/70 hover:text-white"
+                className="min-w-10 min-h-10 p-2 rounded bg-[#0A0A0B] border border-white/10 text-white/70 hover:text-white flex items-center justify-center"
                 title="Toggle French Text"
               >
-                {activeClip.showFrench ? <Eye className="w-3.5 h-3.5 text-[#D4AF37]" /> : <EyeOff className="w-3.5 h-3.5 text-white/40" />}
+                {activeClip.showFrench ? <Eye className="w-4 h-4 text-[#D4AF37]" /> : <EyeOff className="w-4 h-4 text-white/40" />}
               </button>
 
               <button
                 onClick={() => onToggleEnglish(activeSentenceIndex)}
-                className="p-1.5 rounded bg-[#0A0A0B] border border-white/10 text-white/70 hover:text-white"
+                className="min-w-10 min-h-10 p-2 rounded bg-[#0A0A0B] border border-white/10 text-white/70 hover:text-white flex items-center justify-center"
                 title="Toggle Translation"
               >
-                <Languages className={`w-3.5 h-3.5 ${activeClip.showEnglish ? "text-[#D4AF37]" : "text-white/30"}`} />
+                <Languages className={`w-4 h-4 ${activeClip.showEnglish ? "text-[#D4AF37]" : "text-white/30"}`} />
               </button>
             </div>
           </div>
@@ -323,7 +323,7 @@ export const SentenceList: React.FC<SentenceListProps> = ({
           <BookOpen className="w-8 h-8 text-[#D4AF37]/50 mx-auto" />
           <h3 className="text-sm font-semibold text-white/80">No Practice Clips Loaded</h3>
           <p className="text-xs text-white/40 max-w-md mx-auto">
-            Upload an audio file in the top bar, then click <span className="text-[#D4AF37] font-semibold">Auto-Detect Speech (AI STT)</span> or paste a French transcript and click <span className="text-[#D4AF37] font-semibold">Sync Transcript</span> on the right.
+            Upload an audio file in the top bar, then use <span className="text-[#D4AF37] font-semibold">Auto-Detect Speech (AI STT)</span> or paste a French transcript and tap <span className="text-[#D4AF37] font-semibold">Sync Transcript</span> in the transcript panel.
           </p>
         </div>
       )}
@@ -421,7 +421,7 @@ export const SentenceList: React.FC<SentenceListProps> = ({
                     {/* Play Clip Button */}
                     <button
                       onClick={() => onSelectSentence(idx, true)}
-                      className={`flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-bold uppercase tracking-wider transition-all ${
+                      className={`flex items-center gap-1 min-h-9 px-2.5 py-1.5 rounded text-[11px] font-bold uppercase tracking-wider transition-all ${
                         isActive && isPlaying
                           ? "bg-[#D4AF37] text-black"
                           : "bg-white/10 hover:bg-[#D4AF37] hover:text-black text-white"
@@ -434,7 +434,7 @@ export const SentenceList: React.FC<SentenceListProps> = ({
                     {/* Toggle French visibility */}
                     <button
                       onClick={() => onToggleFrench(idx)}
-                      className="p-1 rounded bg-[#0A0A0B] border border-white/10 text-white/50 hover:text-white"
+                      className="min-w-9 min-h-9 p-2 rounded bg-[#0A0A0B] border border-white/10 text-white/50 hover:text-white flex items-center justify-center"
                       title={clip.showFrench ? "Hide French Text" : "Show French Text"}
                     >
                       {clip.showFrench ? <Eye className="w-3.5 h-3.5 text-[#D4AF37]" /> : <EyeOff className="w-3.5 h-3.5 text-white/40" />}
@@ -443,7 +443,7 @@ export const SentenceList: React.FC<SentenceListProps> = ({
                     {/* Toggle English visibility */}
                     <button
                       onClick={() => onToggleEnglish(idx)}
-                      className="p-1 rounded bg-[#0A0A0B] border border-white/10 text-white/50 hover:text-white"
+                      className="min-w-9 min-h-9 p-2 rounded bg-[#0A0A0B] border border-white/10 text-white/50 hover:text-white flex items-center justify-center"
                       title={clip.showEnglish ? "Hide English Translation" : "Show English Translation"}
                     >
                       <Languages className={`w-3.5 h-3.5 ${clip.showEnglish ? "text-white" : "text-white/30"}`} />
@@ -452,7 +452,7 @@ export const SentenceList: React.FC<SentenceListProps> = ({
                     {/* Delete Clip */}
                     <button
                       onClick={() => onDeleteSentence(idx)}
-                      className="p-1 rounded bg-[#0A0A0B] border border-white/10 text-white/40 hover:text-rose-400"
+                      className="min-w-9 min-h-9 p-2 rounded bg-[#0A0A0B] border border-white/10 text-white/40 hover:text-rose-400 flex items-center justify-center"
                       title="Delete clip"
                     >
                       <Trash2 className="w-3.5 h-3.5" />

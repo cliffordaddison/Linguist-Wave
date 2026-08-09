@@ -84,12 +84,12 @@ export const TranscriptUploader: React.FC<TranscriptUploaderProps> = ({
         className="w-full bg-[#0A0A0B] border border-white/10 rounded-lg p-2.5 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-[#D4AF37]/60 font-sans leading-relaxed flex-1 min-h-[70px] resize-none overflow-y-auto"
       />
 
-      <div className="grid grid-cols-2 gap-2 pt-1 shrink-0">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 shrink-0">
         {onAutoTranscribeSTT ? (
           <button
             onClick={onAutoTranscribeSTT}
             disabled={isTranscribingSTT}
-            className="w-full flex items-center justify-center gap-1.5 px-2 py-2 bg-white/5 hover:bg-white/10 border border-[#D4AF37]/30 text-[#D4AF37] font-semibold rounded text-[11px] uppercase tracking-wider transition-colors disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-1.5 px-2 py-3 sm:py-2.5 bg-white/5 hover:bg-white/10 border border-[#D4AF37]/30 text-[#D4AF37] font-semibold rounded text-[11px] uppercase tracking-wider transition-colors disabled:opacity-50 min-h-11"
             title="Auto-detect speech from audio using Gemini STT and translate without transcript"
           >
             {isTranscribingSTT ? (
@@ -105,13 +105,13 @@ export const TranscriptUploader: React.FC<TranscriptUploaderProps> = ({
             )}
           </button>
         ) : (
-          <div />
+          <div className="hidden sm:block" />
         )}
 
         <button
           onClick={handleApplyText}
           disabled={isParsing || !text.trim()}
-          className="w-full flex items-center justify-center gap-1.5 px-2 py-2 bg-[#D4AF37] hover:bg-[#e2c154] text-black font-bold rounded text-[11px] uppercase tracking-widest disabled:opacity-50 transition-all"
+          className="w-full flex items-center justify-center gap-1.5 px-2 py-3 sm:py-2.5 bg-[#D4AF37] hover:bg-[#e2c154] text-black font-bold rounded text-[11px] uppercase tracking-widest disabled:opacity-50 transition-all min-h-11"
         >
           {isParsing ? (
             <>

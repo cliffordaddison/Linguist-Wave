@@ -20,6 +20,7 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isLooping, setIsLooping] = useState<boolean>(true); // default loop enabled
+  const [isPlayingAll, setIsPlayingAll] = useState<boolean>(false);
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
   const [volume, setVolume] = useState<number>(0.9);
 
@@ -45,11 +46,28 @@ export default function App() {
   const volumeRef = useRef<number>(volume);
   const sliceRangeRef = useRef<{ start: number; end: number }>({ start: 0.5, end: 4.8 });
   const isPlayingRef = useRef<boolean>(false);
+  const isPlayingAllRef = useRef<boolean>(false);
+  const sentencesRef = useRef<SentenceClip[]>(sentences);
+  const activeSentenceIndexRef = useRef<number | null>(activeSentenceIndex);
+  const playAllNavigatingRef = useRef<boolean>(false);
+  const advancePlayAllRef = useRef<() => void>(() => {});
 
   const isLoopingRef = useRef<boolean>(isLooping);
   useEffect(() => {
     isLoopingRef.current = isLooping;
   }, [isLooping]);
+
+  useEffect(() => {
+    isPlayingAllRef.current = isPlayingAll;
+  }, [isPlayingAll]);
+
+  useEffect(() => {
+    sentencesRef.current = sentences;
+  }, [sentences]);
+
+  useEffect(() => {
+    activeSentenceIndexRef.current = activeSentenceIndex;
+  }, [activeSentenceIndex]);
 
   useEffect(() => {
     durationRef.current = duration;
@@ -81,6 +99,11 @@ export default function App() {
     };
   }, []);
 
+  const clearPlayAll = useCallback(() => {
+    isPlayingAllRef.current = false;
+    setIsPlayingAll(false);
+  }, []);
+
   const stopAudio = useCallback(() => {
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
@@ -92,7 +115,8 @@ export default function App() {
     }
     isPlayingRef.current = false;
     setIsPlaying(false);
-  }, []);
+    clearPlayAll();
+  }, [clearPlayAll]);
 
   const playAudioRange = useCallback(
     (startSec: number, endSec: number) => {
@@ -123,6 +147,11 @@ export default function App() {
           setCurrentTime(currentPos);
 
           if (currentPos >= sliceRangeRef.current.end - 0.02) {
+            // Play All: advance to next section (ignores Loop)
+            if (isPlayingAllRef.current) {
+              advancePlayAllRef.current();
+              return;
+            }
             if (isLoopingRef.current) {
               const audio = audioElRef.current;
               audio.currentTime = sliceRangeRef.current.start;
@@ -155,6 +184,7 @@ export default function App() {
           .catch(() => {
             isPlayingRef.current = false;
             setIsPlaying(false);
+            clearPlayAll();
           });
       };
 
@@ -164,8 +194,50 @@ export default function App() {
         el.addEventListener("loadedmetadata", startPlayback, { once: true });
       }
     },
-    [stopAudio]
+    [stopAudio, clearPlayAll]
   );
+
+  const advancePlayAll = useCallback(() => {
+    const clips = sentencesRef.current;
+    const current = activeSentenceIndexRef.current ?? 0;
+    const next = current + 1;
+
+    if (next < clips.length) {
+      const clip = clips[next];
+      playAllNavigatingRef.current = true;
+      activeSentenceIndexRef.current = next;
+      setActiveSentenceIndex(next);
+      setSliceStart(clip.startTime);
+      setSliceEnd(clip.endTime);
+      playAudioRange(clip.startTime, clip.endTime);
+      playAllNavigatingRef.current = false;
+      return;
+    }
+
+    // Finished last section — stop completely
+    const lastEnd = clips.length > 0 ? clips[clips.length - 1].endTime : sliceRangeRef.current.end;
+    stopAudio();
+    setCurrentTime(lastEnd);
+  }, [playAudioRange, stopAudio]);
+
+  useEffect(() => {
+    advancePlayAllRef.current = advancePlayAll;
+  }, [advancePlayAll]);
+
+  const startPlayAll = useCallback(() => {
+    if (!audioBuffer || sentencesRef.current.length === 0) return;
+
+    const clip = sentencesRef.current[0];
+    playAllNavigatingRef.current = true;
+    isPlayingAllRef.current = true;
+    setIsPlayingAll(true);
+    activeSentenceIndexRef.current = 0;
+    setActiveSentenceIndex(0);
+    setSliceStart(clip.startTime);
+    setSliceEnd(clip.endTime);
+    playAudioRange(clip.startTime, clip.endTime);
+    playAllNavigatingRef.current = false;
+  }, [audioBuffer, playAudioRange]);
 
   const handleChangeSpeed = (speed: number) => {
     playbackRateRef.current = speed;
@@ -188,6 +260,7 @@ export default function App() {
     if (isPlaying) {
       stopAudio();
     } else {
+      clearPlayAll();
       playAudioRange(sliceStart, sliceEnd);
     }
   };
@@ -362,6 +435,12 @@ export default function App() {
   // Select a specific sentence card to practice
   const handleSelectSentence = (idx: number, autoPlay = true) => {
     if (idx < 0 || idx >= sentences.length) return;
+
+    // Manual clip selection exits Play All mode
+    if (!playAllNavigatingRef.current) {
+      clearPlayAll();
+    }
+
     const clip = sentences[idx];
     setActiveSentenceIndex(idx);
     setSliceStart(clip.startTime);
@@ -645,31 +724,32 @@ export default function App() {
   };
 
   return (
-    <div className="h-screen max-h-screen w-screen overflow-hidden bg-[#0A0A0B] text-[#E0E0E0] font-sans antialiased selection:bg-[#D4AF37] selection:text-black flex flex-col">
+    <div className="min-h-dvh h-dvh max-h-dvh w-full overflow-hidden bg-[#0A0A0B] text-[#E0E0E0] font-sans antialiased selection:bg-[#D4AF37] selection:text-black flex flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
       {/* Top Navigation Bar with LinguistWave + Upload Audio Button on the right */}
       <header className="w-full bg-[#0F0F11] border-b border-white/10 shrink-0 z-30">
-        <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 bg-[#D4AF37] rounded flex items-center justify-center text-black font-bold text-xs tracking-tight shadow-md">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 shrink-0 bg-[#D4AF37] rounded flex items-center justify-center text-black font-bold text-xs tracking-tight shadow-md">
               LW
             </div>
-            <h1 className="text-xl font-medium tracking-tight text-white">
+            <h1 className="text-lg sm:text-xl font-medium tracking-tight text-white truncate">
               Linguist<span className="font-light italic text-[#D4AF37]">Wave</span>
             </h1>
           </div>
 
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-white/50 font-mono">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span className="max-w-[200px] truncate" title={currentAudioName}>
+          <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+            <div className="hidden sm:flex items-center gap-2 text-xs uppercase tracking-widest text-white/50 font-mono min-w-0">
+              <span className="w-2 h-2 shrink-0 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="max-w-[140px] lg:max-w-[200px] truncate" title={currentAudioName}>
                 {currentAudioName}
               </span>
             </div>
 
             {/* SINGLE UPLOAD AUDIO BUTTON ON THE RIGHT */}
-            <label className="flex items-center gap-2 px-3.5 py-1.5 bg-[#D4AF37] hover:bg-[#e2c154] text-black text-xs font-bold uppercase tracking-wider rounded-md cursor-pointer transition-colors shadow-md">
+            <label className="flex items-center gap-2 px-3 sm:px-3.5 py-2 sm:py-1.5 bg-[#D4AF37] hover:bg-[#e2c154] text-black text-xs font-bold uppercase tracking-wider rounded-md cursor-pointer transition-colors shadow-md shrink-0">
               <UploadCloud className="w-4 h-4 text-black" />
-              <span>Upload Audio</span>
+              <span className="sm:hidden">Upload</span>
+              <span className="hidden sm:inline">Upload Audio</span>
               <input
                 type="file"
                 accept="audio/mp3,audio/wav,audio/m4a,audio/ogg,audio/webm"
@@ -681,8 +761,8 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Single-View Workspace Container - Non-scrollable viewport fit */}
-      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-3 flex-1 flex flex-col min-h-0 space-y-3 overflow-hidden">
+      {/* Main workspace: scroll on phones/tablets, locked single viewport on lg+ */}
+      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-3 flex-1 flex flex-col min-h-0 space-y-3 overflow-y-auto lg:overflow-hidden overscroll-contain">
         {/* Waveform Slicer Visualizer */}
         <div className="shrink-0">
           <WaveformDisplay
@@ -703,24 +783,27 @@ export default function App() {
           <AudioControlBar
             isPlaying={isPlaying}
             isLooping={isLooping}
+            isPlayingAll={isPlayingAll}
             playbackRate={playbackRate}
             volume={volume}
             onPlayPause={handlePlayPause}
             onStop={stopAudio}
             onToggleLoop={() => setIsLooping(!isLooping)}
+            onPlayAll={startPlayAll}
             onChangeSpeed={handleChangeSpeed}
             onChangeVolume={handleChangeVolume}
             onAutoSegment={handleAutoAlignSentences}
             onPrevSentence={handlePrevSentence}
             onNextSentence={handleNextSentence}
             hasAudio={!!audioBuffer}
+            hasClips={sentences.length > 0}
           />
         </div>
 
         {/* Main Grid: Sentences Practice Column & Control Column */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1 min-h-0 overflow-hidden">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1 min-h-0 lg:overflow-hidden">
           {/* Left Column: Interactive Sentence Practice List */}
-          <div className="lg:col-span-8 flex flex-col min-h-0 overflow-hidden">
+          <div className="lg:col-span-8 flex flex-col min-h-[50vh] lg:min-h-0 overflow-hidden">
             <SentenceList
               sentences={sentences}
               activeSentenceIndex={activeSentenceIndex}
@@ -738,7 +821,7 @@ export default function App() {
           </div>
 
           {/* Right Column: Loop Mode Status & Transcript / STT Uploader */}
-          <div className="lg:col-span-4 flex flex-col min-h-0 space-y-3 overflow-hidden">
+          <div className="lg:col-span-4 flex flex-col min-h-[280px] lg:min-h-0 space-y-3 overflow-hidden">
             {/* Playback Loop Mode Card */}
             <div className="bg-[#141417] border border-white/5 p-3.5 rounded-xl space-y-2 shrink-0">
               <div className="flex items-center justify-between text-xs font-bold uppercase tracking-widest">
@@ -747,7 +830,7 @@ export default function App() {
               </div>
               <button
                 onClick={() => setIsLooping(!isLooping)}
-                className={`w-full py-2 rounded-md text-xs font-bold uppercase tracking-widest transition-colors ${
+                className={`w-full py-2.5 sm:py-2 rounded-md text-xs font-bold uppercase tracking-widest transition-colors ${
                   isLooping
                     ? "bg-[#D4AF37] text-black hover:bg-[#e2c154]"
                     : "bg-white/10 text-white hover:bg-white/20"
@@ -758,7 +841,7 @@ export default function App() {
             </div>
 
             {/* Transcript Uploader / STT Auto-Detect */}
-            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            <div className="flex-1 min-h-[220px] lg:min-h-0 flex flex-col overflow-hidden">
               <TranscriptUploader
                 currentTranscript={currentTranscript}
                 onUpdateTranscript={handleUpdateTranscript}

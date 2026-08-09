@@ -1,13 +1,13 @@
 import React, { useRef, useEffect, useState, useCallback } from "react";
 import { formatTime } from "../utils/audioUtils";
-import { ZoomIn, ZoomOut, MoveHorizontal, RotateCcw } from "lucide-react";
+import { MoveHorizontal, RotateCcw } from "lucide-react";
 
 interface WaveformDisplayProps {
   waveformPeaks: number[];
   duration: number; // in seconds
   currentTime: number; // in seconds
   sliceStart: number; // in seconds
-  sliceEnd: number;   // in seconds
+  sliceEnd: number; // in seconds
   isPlaying: boolean;
   onSliceChange: (start: number, end: number) => void;
   onSeek: (time: number) => void;
@@ -27,11 +27,11 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const didDragRef = useRef(false);
 
   const [isDragging, setIsDragging] = useState<"left" | "right" | "center" | null>(null);
   const [dragStartX, setDragStartX] = useState(0);
   const [initialSlice, setInitialSlice] = useState({ start: sliceStart, end: sliceEnd });
-  const [zoomLevel, setZoomLevel] = useState<number>(1); // 1x to 4x zoom
 
   const safeDuration = duration > 0 ? duration : 30;
 
@@ -125,7 +125,7 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
     ctx.fill();
   }, [waveformPeaks, safeDuration, sliceStart, sliceEnd, currentTime]);
 
-  // Handle Resize & Canvas Scaling
+  // Handle Resize & Canvas Scaling (height follows CSS: 110px mobile / 140px sm+)
   useEffect(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -133,8 +133,8 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
 
     const resizeObserver = new ResizeObserver(() => {
       const rect = container.getBoundingClientRect();
-      canvas.width = rect.width;
-      canvas.height = 140;
+      canvas.width = Math.max(1, Math.floor(rect.width));
+      canvas.height = Math.max(1, Math.floor(rect.height));
       drawWaveform();
     });
 
@@ -146,20 +146,30 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
     drawWaveform();
   }, [drawWaveform]);
 
-  // Handle Dragging Slicer Handles
-  const handleMouseDown = (e: React.MouseEvent, type: "left" | "right" | "center") => {
+  // Pointer Events: unified mouse + touch slice dragging
+  const handlePointerDown = (e: React.PointerEvent, type: "left" | "right" | "center") => {
     e.stopPropagation();
+    e.preventDefault();
+    didDragRef.current = false;
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore unsupported capture */
+    }
     setIsDragging(type);
     setDragStartX(e.clientX);
     setInitialSlice({ start: sliceStart, end: sliceEnd });
   };
 
-  const handleMouseMove = useCallback(
-    (e: MouseEvent) => {
+  const handlePointerMove = useCallback(
+    (e: PointerEvent) => {
       if (!isDragging || !containerRef.current) return;
 
       const rect = containerRef.current.getBoundingClientRect();
       const deltaX = e.clientX - dragStartX;
+      if (Math.abs(deltaX) > 2) {
+        didDragRef.current = true;
+      }
       const deltaSecs = (deltaX / rect.width) * safeDuration;
 
       let newStart = initialSlice.start;
@@ -181,7 +191,7 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
     [isDragging, dragStartX, initialSlice, safeDuration, onSliceChange]
   );
 
-  const handleMouseUp = useCallback(() => {
+  const handlePointerUp = useCallback(() => {
     if (isDragging) {
       setIsDragging(null);
     }
@@ -189,18 +199,23 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
 
   useEffect(() => {
     if (isDragging) {
-      window.addEventListener("mousemove", handleMouseMove);
-      window.addEventListener("mouseup", handleMouseUp);
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", handlePointerUp);
+      window.addEventListener("pointercancel", handlePointerUp);
     }
     return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
     };
-  }, [isDragging, handleMouseMove, handleMouseUp]);
+  }, [isDragging, handlePointerMove, handlePointerUp]);
 
-  // Click waveform to seek
+  // Click waveform to seek (skip if we just finished a drag)
   const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (isDragging || !containerRef.current) return;
+    if (isDragging || didDragRef.current || !containerRef.current) {
+      didDragRef.current = false;
+      return;
+    }
     const rect = containerRef.current.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const clickedTime = (clickX / rect.width) * safeDuration;
@@ -228,7 +243,7 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
         </div>
 
         {/* Timestamp Readout */}
-        <div className="flex items-center gap-4 font-mono text-xs">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-4 font-mono text-xs">
           <div className="bg-[#0A0A0B] border border-white/10 px-3 py-1 rounded-md text-white/70">
             Slice: <span className="text-[#D4AF37] font-bold">{formatTime(sliceStart, true)}</span> -{" "}
             <span className="text-[#D4AF37] font-bold">{formatTime(sliceEnd, true)}</span>{" "}
@@ -246,7 +261,10 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
       <div
         ref={containerRef}
         onClick={handleCanvasClick}
-        className="relative w-full h-[140px] rounded-lg overflow-hidden cursor-pointer bg-[#0A0A0B] border border-white/5 shadow-inner group"
+        className={`relative w-full h-[110px] sm:h-[140px] rounded-lg overflow-hidden cursor-pointer bg-[#0A0A0B] border border-white/5 shadow-inner group ${
+          isDragging ? "touch-none" : ""
+        }`}
+        style={isDragging ? { touchAction: "none" } : undefined}
       >
         {/* Canvas Waveform Render */}
         <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
@@ -256,36 +274,46 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
           style={{
             left: `${leftPct}%`,
             width: `${widthPct}%`,
+            touchAction: "none",
           }}
           className="absolute top-0 bottom-[24px] border-2 border-[#D4AF37] bg-[#D4AF37]/10 shadow-[0_0_15px_rgba(212,175,55,0.3)] rounded flex items-center justify-between z-10 transition-shadow hover:shadow-[0_0_20px_rgba(212,175,55,0.5)]"
         >
           {/* Draggable Center Body */}
           <div
-            onMouseDown={(e) => handleMouseDown(e, "center")}
-            className="absolute inset-0 cursor-grab active:cursor-grabbing flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+            onPointerDown={(e) => handlePointerDown(e, "center")}
+            className={`absolute inset-0 cursor-grab active:cursor-grabbing flex items-center justify-center transition-opacity ${
+              isDragging === "center" ? "opacity-100" : "opacity-40 sm:opacity-0 sm:group-hover:opacity-100"
+            }`}
             title="Drag to shift time slice"
+            style={{ touchAction: "none" }}
           >
-            <div className="bg-[#D4AF37] text-black px-2 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase flex items-center gap-1 shadow">
+            <div className="bg-[#D4AF37] text-black px-2 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase flex items-center gap-1 shadow pointer-events-none">
               <MoveHorizontal className="w-3 h-3" /> Move
             </div>
           </div>
 
-          {/* Left Handle Bar */}
+          {/* Left Handle — wide invisible hit pad, thin visible bar */}
           <div
-            onMouseDown={(e) => handleMouseDown(e, "left")}
-            className="absolute -left-1.5 top-0 bottom-0 w-3.5 bg-[#D4AF37] rounded-l cursor-ew-resize hover:bg-[#e2c154] transition-colors flex items-center justify-center shadow-md z-20"
+            onPointerDown={(e) => handlePointerDown(e, "left")}
+            className="absolute -left-4 top-0 bottom-0 w-10 flex items-center justify-center cursor-ew-resize z-20"
             title="Drag left to adjust start time"
+            style={{ touchAction: "none" }}
           >
-            <div className="w-0.5 h-6 bg-black/60 rounded-full"></div>
+            <div className="w-3.5 h-full bg-[#D4AF37] hover:bg-[#e2c154] rounded-l shadow-md flex items-center justify-center transition-colors">
+              <div className="w-0.5 h-6 bg-black/60 rounded-full"></div>
+            </div>
           </div>
 
-          {/* Right Handle Bar */}
+          {/* Right Handle — wide invisible hit pad, thin visible bar */}
           <div
-            onMouseDown={(e) => handleMouseDown(e, "right")}
-            className="absolute -right-1.5 top-0 bottom-0 w-3.5 bg-[#D4AF37] rounded-r cursor-ew-resize hover:bg-[#e2c154] transition-colors flex items-center justify-center shadow-md z-20"
+            onPointerDown={(e) => handlePointerDown(e, "right")}
+            className="absolute -right-4 top-0 bottom-0 w-10 flex items-center justify-center cursor-ew-resize z-20"
             title="Drag right to adjust end time"
+            style={{ touchAction: "none" }}
           >
-            <div className="w-0.5 h-6 bg-black/60 rounded-full"></div>
+            <div className="w-3.5 h-full bg-[#D4AF37] hover:bg-[#e2c154] rounded-r shadow-md flex items-center justify-center transition-colors">
+              <div className="w-0.5 h-6 bg-black/60 rounded-full"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -296,13 +324,13 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
           <span className="text-white/40 font-medium mr-1">Fine-Tune Start:</span>
           <button
             onClick={() => onSliceChange(Math.max(0, sliceStart - 0.2), sliceEnd)}
-            className="px-2 py-1 bg-[#0A0A0B] border border-white/10 hover:border-[#D4AF37]/50 hover:text-[#D4AF37] rounded text-white/80 transition-colors font-mono"
+            className="min-h-10 sm:min-h-0 px-3 py-2 sm:px-2 sm:py-1 bg-[#0A0A0B] border border-white/10 hover:border-[#D4AF37]/50 hover:text-[#D4AF37] rounded text-white/80 transition-colors font-mono"
           >
             -0.2s
           </button>
           <button
             onClick={() => onSliceChange(Math.min(sliceEnd - 0.3, sliceStart + 0.2), sliceEnd)}
-            className="px-2 py-1 bg-[#0A0A0B] border border-white/10 hover:border-[#D4AF37]/50 hover:text-[#D4AF37] rounded text-white/80 transition-colors font-mono"
+            className="min-h-10 sm:min-h-0 px-3 py-2 sm:px-2 sm:py-1 bg-[#0A0A0B] border border-white/10 hover:border-[#D4AF37]/50 hover:text-[#D4AF37] rounded text-white/80 transition-colors font-mono"
           >
             +0.2s
           </button>
@@ -312,13 +340,13 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
           <span className="text-white/40 font-medium mr-1">Fine-Tune End:</span>
           <button
             onClick={() => onSliceChange(sliceStart, Math.max(sliceStart + 0.3, sliceEnd - 0.2))}
-            className="px-2 py-1 bg-[#0A0A0B] border border-white/10 hover:border-[#D4AF37]/50 hover:text-[#D4AF37] rounded text-white/80 transition-colors font-mono"
+            className="min-h-10 sm:min-h-0 px-3 py-2 sm:px-2 sm:py-1 bg-[#0A0A0B] border border-white/10 hover:border-[#D4AF37]/50 hover:text-[#D4AF37] rounded text-white/80 transition-colors font-mono"
           >
             -0.2s
           </button>
           <button
             onClick={() => onSliceChange(sliceStart, Math.min(safeDuration, sliceEnd + 0.2))}
-            className="px-2 py-1 bg-[#0A0A0B] border border-white/10 hover:border-[#D4AF37]/50 hover:text-[#D4AF37] rounded text-white/80 transition-colors font-mono"
+            className="min-h-10 sm:min-h-0 px-3 py-2 sm:px-2 sm:py-1 bg-[#0A0A0B] border border-white/10 hover:border-[#D4AF37]/50 hover:text-[#D4AF37] rounded text-white/80 transition-colors font-mono"
           >
             +0.2s
           </button>
@@ -326,7 +354,7 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
 
         <button
           onClick={() => onSliceChange(0, safeDuration)}
-          className="flex items-center gap-1 px-2.5 py-1 bg-[#0A0A0B] border border-white/10 hover:bg-white/5 rounded text-white/60 hover:text-white transition-colors"
+          className="flex items-center gap-1 min-h-10 sm:min-h-0 px-3 py-2 sm:px-2.5 sm:py-1 bg-[#0A0A0B] border border-white/10 hover:bg-white/5 rounded text-white/60 hover:text-white transition-colors"
         >
           <RotateCcw className="w-3 h-3" /> Reset Selection
         </button>
