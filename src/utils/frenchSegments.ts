@@ -1,5 +1,21 @@
 import { SentenceClip } from "../types";
 
+// #region agent log
+fetch("http://127.0.0.1:7526/ingest/874b278f-a88a-47bd-bce0-8e50d0fe1f30", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "033511" },
+  body: JSON.stringify({
+    sessionId: "033511",
+    runId: "blank-screen",
+    hypothesisId: "B",
+    location: "frenchSegments.ts:load",
+    message: "frenchSegments module loaded",
+    data: {},
+    timestamp: Date.now(),
+  }),
+}).catch(() => {});
+// #endregion
+
 const CONNECTORS = [
   "et puis",
   "et alors",

@@ -17,6 +17,21 @@ const EMPTY_ENGLISH = "—";
 const AI_TRANSLATE_STORAGE_KEY = "lw-ai-translate";
 
 export default function App() {
+  // #region agent log
+  fetch("http://127.0.0.1:7526/ingest/874b278f-a88a-47bd-bce0-8e50d0fe1f30", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "033511" },
+    body: JSON.stringify({
+      sessionId: "033511",
+      runId: "blank-screen",
+      hypothesisId: "A",
+      location: "App.tsx:render-start",
+      message: "App render start",
+      data: {},
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
   // Audio state
   const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null);
   const [waveformPeaks, setWaveformPeaks] = useState<number[]>([]);
@@ -159,6 +174,21 @@ export default function App() {
     };
   }, [isPlaying]);
 
+  // #region agent log
+  fetch("http://127.0.0.1:7526/ingest/874b278f-a88a-47bd-bce0-8e50d0fe1f30", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "033511" },
+    body: JSON.stringify({
+      sessionId: "033511",
+      runId: "blank-screen",
+      hypothesisId: "A",
+      location: "App.tsx:before-media-session-effect",
+      message: "about to register mediaSession effect",
+      data: { playAudioRangeType: typeof playAudioRange, stopAudioType: typeof stopAudio },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
   // Media Session so mobile OS can keep the audio session alive
   useEffect(() => {
     if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
@@ -899,6 +929,21 @@ export default function App() {
     });
   };
 
+  // #region agent log
+  fetch("http://127.0.0.1:7526/ingest/874b278f-a88a-47bd-bce0-8e50d0fe1f30", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "033511" },
+    body: JSON.stringify({
+      sessionId: "033511",
+      runId: "blank-screen",
+      hypothesisId: "C",
+      location: "App.tsx:before-return",
+      message: "App reached JSX return",
+      data: { vw: typeof window !== "undefined" ? window.innerWidth : 0, vh: typeof window !== "undefined" ? window.innerHeight : 0 },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
   return (
     <div className="min-h-dvh h-dvh max-h-dvh w-full overflow-hidden bg-[#0A0A0B] text-[#E0E0E0] font-sans antialiased selection:bg-[#D4AF37] selection:text-black flex flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
       {/* Top Navigation Bar with LinguistWave + Upload Audio Button on the right */}
