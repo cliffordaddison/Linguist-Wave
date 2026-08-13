@@ -94,17 +94,17 @@ Return a JSON array of sentence objects adhering strictly to the JSON schema.`,
   }
 });
 
-// API Route: Transcribe an individual audio segment clip
-app.post("/api/transcribe-audio-segment", async (req, res) => {
+// API Route: Transcribe full audio in a single call and assign sentences to segments
+app.post("/api/transcribe-full-audio-segments", async (req, res) => {
   try {
-    const { audioBase64, mimeType } = req.body;
+    const { audioBase64, mimeType, targetCount } = req.body;
     if (!audioBase64) {
       return res.status(400).json({ error: "audioBase64 is required" });
     }
 
     const ai = getGeminiClient();
     if (!ai) {
-      return res.status(200).json({ frenchText: "", englishTranslation: "" });
+      return res.status(200).json({ transcripts: [], fallback: true });
     }
 
     try {
@@ -119,37 +119,49 @@ app.post("/api/transcribe-audio-segment", async (req, res) => {
           },
           {
             text: `You are a native French Speech-to-Text (STT) transcriber.
-Listen to this audio clip carefully and transcribe EVERY spoken French word verbatim with 100% accuracy, including all accents (e.g., é, è, ê, à, ç, ô, etc.).
-Also provide a direct English translation for this segment.
+Listen to this audio recording carefully and transcribe ALL spoken French text verbatim in chronological order.
+${targetCount ? `Divide the transcript into approximately ${targetCount} natural French sentence segments.` : "Divide the transcript into natural French sentence segments."}
 
-Return a JSON object: {"frenchText": "transcribed French text", "englishTranslation": "English translation"}`,
+For each spoken segment, provide:
+1. "frenchText": exact spoken French text with correct accents.
+2. "englishTranslation": clear English translation.
+
+Return a JSON array of objects: [{"frenchText": "...", "englishTranslation": "..."}]`,
           },
         ],
         config: {
           responseMimeType: "application/json",
           responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              frenchText: { type: Type.STRING },
-              englishTranslation: { type: Type.STRING },
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                frenchText: { type: Type.STRING },
+                englishTranslation: { type: Type.STRING },
+              },
+              required: ["frenchText", "englishTranslation"],
             },
-            required: ["frenchText", "englishTranslation"],
           },
         },
       });
 
-      const result = JSON.parse(response.text || "{}");
-      return res.json({
-        frenchText: result.frenchText || "",
-        englishTranslation: result.englishTranslation || "",
-      });
+      const result = JSON.parse(response.text || "[]");
+      return res.json({ transcripts: result });
     } catch (apiErr: any) {
-      console.warn("Segment transcription API error:", apiErr.message || apiErr);
-      return res.status(200).json({ frenchText: "", englishTranslation: "" });
+      const isRateLimit = apiErr.status === 429 || (apiErr.message && apiErr.message.includes("429")) || (apiErr.message && apiErr.message.includes("quota"));
+      if (isRateLimit) {
+        console.warn("Gemini API Rate Limit (429) hit during audio transcription. Retrying or returning rate limit warning.");
+        return res.status(429).json({
+          error: "Rate limit reached. Please wait a few seconds before trying again.",
+          rateLimited: true,
+        });
+      }
+      console.warn("Audio transcription error:", apiErr.message || apiErr);
+      return res.status(200).json({ transcripts: [], error: apiErr.message });
     }
   } catch (err: any) {
-    console.error("Segment transcription error:", err);
-    return res.status(200).json({ frenchText: "", englishTranslation: "" });
+    console.error("Transcribe full audio error:", err);
+    return res.status(200).json({ transcripts: [] });
   }
 });
 

@@ -586,7 +586,7 @@ export default function App() {
     }
   };
 
-  // Internal Background Audio STT (processes audio file segments directly in the background)
+  // Internal Background Audio STT (processes full audio in 1 single request to avoid rate limits)
   const [isInternalSTTTranscribing, setIsInternalSTTTranscribing] = useState<boolean>(false);
   const [sttProgressStatus, setSttProgressStatus] = useState<string>("");
 
@@ -597,52 +597,53 @@ export default function App() {
     }
 
     setIsInternalSTTTranscribing(true);
-    const updatedSentences = [...sentences];
-    const transcribedTexts: string[] = [];
+    setSttProgressStatus("Transcribing audio file...");
 
     try {
-      for (let i = 0; i < sentences.length; i++) {
-        setSttProgressStatus(`Segment ${i + 1} of ${sentences.length}...`);
-        const clip = sentences[i];
+      const fullWavBase64 = audioBufferToBase64Wav(audioBuffer);
 
-        // Extract exact AudioBuffer slice for this long-pause segment
-        const subBuffer = sliceAudioBuffer(audioBuffer, clip.startTime, clip.endTime);
-        const wavBase64 = audioBufferToBase64Wav(subBuffer);
+      const res = await fetch("/api/transcribe-full-audio-segments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          audioBase64: fullWavBase64,
+          mimeType: "audio/wav",
+          targetCount: sentences.length,
+        }),
+      });
 
-        try {
-          const res = await fetch("/api/transcribe-audio-segment", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ audioBase64: wavBase64, mimeType: "audio/wav" }),
-          });
-
-          if (res.ok) {
-            const data = await res.json();
-            if (data.frenchText && data.frenchText.trim()) {
-              const text = data.frenchText.trim();
-              updatedSentences[i] = {
-                ...updatedSentences[i],
-                frenchText: text,
-                englishTranslation:
-                  data.englishTranslation || updatedSentences[i].englishTranslation || EMPTY_ENGLISH,
-              };
-              transcribedTexts.push(text);
-            } else {
-              transcribedTexts.push(updatedSentences[i].frenchText);
-            }
-          }
-        } catch (err) {
-          console.warn(`Error transcribing segment ${i + 1}:`, err);
-        }
-
-        // Live update segment cards as each segment finishes
-        setSentences([...updatedSentences]);
+      if (res.status === 429) {
+        alert("API rate limit reached. Please wait ~30 seconds before clicking Transcribe again.");
+        return;
       }
 
-      // Update transcript editor view with full French text
-      if (transcribedTexts.length > 0) {
-        const fullScript = transcribedTexts.join("\n\n");
-        setCurrentTranscript(fullScript);
+      if (res.ok) {
+        const data = await res.json();
+        const transcripts: { frenchText: string; englishTranslation: string }[] = data.transcripts || [];
+
+        if (transcripts.length > 0) {
+          const updatedSentences = sentences.map((clip, idx) => {
+            if (idx < transcripts.length) {
+              return {
+                ...clip,
+                frenchText: transcripts[idx].frenchText || clip.frenchText,
+                englishTranslation:
+                  transcripts[idx].englishTranslation || clip.englishTranslation || EMPTY_ENGLISH,
+              };
+            }
+            return clip;
+          });
+
+          setSentences(updatedSentences);
+
+          const fullScript = transcripts
+            .map((item) => item.frenchText)
+            .filter(Boolean)
+            .join("\n\n");
+          if (fullScript) {
+            setCurrentTranscript(fullScript);
+          }
+        }
       }
     } catch (err) {
       console.error("Internal Audio STT Error:", err);
