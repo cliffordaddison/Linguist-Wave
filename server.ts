@@ -43,22 +43,25 @@ app.post("/api/transcribe-audio", async (req, res) => {
 
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
+        model: "gemini-2.5-flash",
         contents: [
           {
             inlineData: {
-              mimeType: mimeType || "audio/mp3",
+              mimeType: mimeType || "audio/wav",
               data: audioBase64,
             },
           },
           {
-            text: `Listen to this French audio recording carefully and transcribe ALL spoken words.
-1. Perform Speech-to-Text (STT) transcribing EVERY spoken French word verbatim without missing any words.
-2. Group the transcribed French words into natural, full continuous sentences and thoughts.
-3. CRUCIAL SEGMENTATION RULE: Do NOT break a sentence after conjunctions or connecting words like 'et', 'mais', 'ou', 'donc', 'car', 'puis', 'parce que', 'alors', 'cependant', 'néanmoins', etc. Keep the connector attached to the sentence/clause it belongs to so the thought is continuous and complete!
-4. Estimate accurate startTime and endTime timestamps (in seconds) for each sentence segment covering the full audio file from start to finish.
-5. Provide a direct English translation for each sentence segment.
-Return a JSON array of sentence objects.`,
+            text: `You are a native French Speech-to-Text (STT) transcriber and sentence segmenter.
+Listen to this audio recording carefully and transcribe EVERY spoken French word with 100% accuracy, including all accents (e.g. é, è, ê, à, ç, ô, etc.).
+
+STT & SEGMENTATION RULES:
+1. Complete Transcripts: Transcribe all spoken words into clear, natural French sentences. Do not summarize or skip words.
+2. Smart Connector Rules: Never break a sentence after connecting words such as 'et', 'mais', 'ou', 'donc', 'car', 'puis', 'parce que', 'alors', 'cependant', 'néanmoins', 'lorsque', 'quand', 'puisque', etc. Attach connectors to the phrase or sentence they introduce so every segment is a complete, grammatically sound sentence.
+3. Timestamps: Provide accurate startTime and endTime in seconds for each sentence segment spanning from 0 to audio duration.
+4. Translation: Provide a clear English translation for each sentence segment.
+
+Return a JSON array of sentence objects adhering strictly to the JSON schema.`,
           },
         ],
         config: {
@@ -88,6 +91,65 @@ Return a JSON array of sentence objects.`,
   } catch (err: any) {
     console.error("Audio Transcription error:", err);
     return res.status(200).json({ sentences: [], fallback: true });
+  }
+});
+
+// API Route: Transcribe an individual audio segment clip
+app.post("/api/transcribe-audio-segment", async (req, res) => {
+  try {
+    const { audioBase64, mimeType } = req.body;
+    if (!audioBase64) {
+      return res.status(400).json({ error: "audioBase64 is required" });
+    }
+
+    const ai = getGeminiClient();
+    if (!ai) {
+      return res.status(200).json({ frenchText: "", englishTranslation: "" });
+    }
+
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [
+          {
+            inlineData: {
+              mimeType: mimeType || "audio/wav",
+              data: audioBase64,
+            },
+          },
+          {
+            text: `You are a native French Speech-to-Text (STT) transcriber.
+Listen to this audio clip carefully and transcribe EVERY spoken French word verbatim with 100% accuracy, including all accents (e.g., é, è, ê, à, ç, ô, etc.).
+Also provide a direct English translation for this segment.
+
+Return a JSON object: {"frenchText": "transcribed French text", "englishTranslation": "English translation"}`,
+          },
+        ],
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              frenchText: { type: Type.STRING },
+              englishTranslation: { type: Type.STRING },
+            },
+            required: ["frenchText", "englishTranslation"],
+          },
+        },
+      });
+
+      const result = JSON.parse(response.text || "{}");
+      return res.json({
+        frenchText: result.frenchText || "",
+        englishTranslation: result.englishTranslation || "",
+      });
+    } catch (apiErr: any) {
+      console.warn("Segment transcription API error:", apiErr.message || apiErr);
+      return res.status(200).json({ frenchText: "", englishTranslation: "" });
+    }
+  } catch (err: any) {
+    console.error("Segment transcription error:", err);
+    return res.status(200).json({ frenchText: "", englishTranslation: "" });
   }
 });
 

@@ -5,13 +5,14 @@ import {
   extractWaveformPeaks,
   detectPauseSegments,
   audioBufferToBase64Wav,
+  sliceAudioBuffer,
 } from "./utils/audioUtils";
 import { splitFrenchSentences, mergeContinuationClips } from "./utils/frenchSegments";
 import { WaveformDisplay } from "./components/WaveformDisplay";
 import { AudioControlBar } from "./components/AudioControlBar";
 import { SentenceList } from "./components/SentenceList";
 import { TranscriptUploader } from "./components/TranscriptUploader";
-import { UploadCloud } from "lucide-react";
+import { UploadCloud, Cpu, Loader2, CheckCircle2 } from "lucide-react";
 
 const EMPTY_ENGLISH = "—";
 const AI_TRANSLATE_STORAGE_KEY = "lw-ai-translate";
@@ -222,7 +223,20 @@ export default function App() {
       return;
     }
 
-    // Finished last section — stop completely
+    // Finished last section — check if Loop is enabled to start from beginning
+    if (isLoopingRef.current && clips.length > 0) {
+      const firstClip = clips[0];
+      playAllNavigatingRef.current = true;
+      activeSentenceIndexRef.current = 0;
+      setActiveSentenceIndex(0);
+      setSliceStart(firstClip.startTime);
+      setSliceEnd(firstClip.endTime);
+      playAudioRange(firstClip.startTime, firstClip.endTime);
+      playAllNavigatingRef.current = false;
+      return;
+    }
+
+    // Finished last section without Loop — stop completely
     const lastEnd = clips.length > 0 ? clips[clips.length - 1].endTime : sliceRangeRef.current.end;
     stopAudio();
     setCurrentTime(lastEnd);
@@ -472,8 +486,8 @@ export default function App() {
       setWaveformPeaks(extractWaveformPeaks(decodedBuffer, 800));
       setCurrentAudioName(file.name);
 
-      // Automatically run Speech-to-Text (STT) on the uploaded French audio file!
-      handleAutoTranscribeSTT(decodedBuffer);
+      // Segmentation based strictly on local long audio pauses (100% free, no Gemini dependency)
+      handleAutoAlignSentences(decodedBuffer);
     } catch (err) {
       alert("Error decoding audio file. Please ensure it is a valid audio format.");
     }
@@ -569,6 +583,72 @@ export default function App() {
       handleAutoAlignSentences(targetBuffer);
     } finally {
       setIsTranscribingSTT(false);
+    }
+  };
+
+  // Internal Background Audio STT (processes audio file segments directly in the background)
+  const [isInternalSTTTranscribing, setIsInternalSTTTranscribing] = useState<boolean>(false);
+  const [sttProgressStatus, setSttProgressStatus] = useState<string>("");
+
+  const handleRunInternalAudioSTT = async () => {
+    if (!audioBuffer || sentences.length === 0) {
+      alert("Please upload an audio file first.");
+      return;
+    }
+
+    setIsInternalSTTTranscribing(true);
+    const updatedSentences = [...sentences];
+    const transcribedTexts: string[] = [];
+
+    try {
+      for (let i = 0; i < sentences.length; i++) {
+        setSttProgressStatus(`Segment ${i + 1} of ${sentences.length}...`);
+        const clip = sentences[i];
+
+        // Extract exact AudioBuffer slice for this long-pause segment
+        const subBuffer = sliceAudioBuffer(audioBuffer, clip.startTime, clip.endTime);
+        const wavBase64 = audioBufferToBase64Wav(subBuffer);
+
+        try {
+          const res = await fetch("/api/transcribe-audio-segment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ audioBase64: wavBase64, mimeType: "audio/wav" }),
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            if (data.frenchText && data.frenchText.trim()) {
+              const text = data.frenchText.trim();
+              updatedSentences[i] = {
+                ...updatedSentences[i],
+                frenchText: text,
+                englishTranslation:
+                  data.englishTranslation || updatedSentences[i].englishTranslation || EMPTY_ENGLISH,
+              };
+              transcribedTexts.push(text);
+            } else {
+              transcribedTexts.push(updatedSentences[i].frenchText);
+            }
+          }
+        } catch (err) {
+          console.warn(`Error transcribing segment ${i + 1}:`, err);
+        }
+
+        // Live update segment cards as each segment finishes
+        setSentences([...updatedSentences]);
+      }
+
+      // Update transcript editor view with full French text
+      if (transcribedTexts.length > 0) {
+        const fullScript = transcribedTexts.join("\n\n");
+        setCurrentTranscript(fullScript);
+      }
+    } catch (err) {
+      console.error("Internal Audio STT Error:", err);
+    } finally {
+      setIsInternalSTTTranscribing(false);
+      setSttProgressStatus("");
     }
   };
 
@@ -685,36 +765,36 @@ export default function App() {
 
     let newClips: SentenceClip[] = [];
 
-    // IF USER HAS EXISTING CLIPS (e.g., after deleting unwanted sections or auto-detecting/fine-tuning clips)
+    // IF USER HAS EXISTING CLIPS (e.g., long-pause audio segments):
     if (sentences.length > 0) {
-      newClips = parsedSentences.map((textLine, idx) => {
-        if (idx < sentences.length) {
-          // Preserve existing/fine-tuned clip bounds & ID!
-          return {
-            ...sentences[idx],
-            index: idx,
-            frenchText: textLine,
-            englishTranslation: aiTranslateEnabledRef.current
-              ? "Translating..."
-              : sentences[idx].englishTranslation || EMPTY_ENGLISH,
-          };
-        } else {
-          // If transcript has extra lines beyond existing clips, append after last clip
-          const lastClip = sentences[sentences.length - 1];
+      // Map parsed French STT sentences into each respective segment clip
+      newClips = sentences.map((clip, idx) => ({
+        ...clip,
+        frenchText: parsedSentences[idx] || clip.frenchText,
+        englishTranslation:
+          aiTranslateEnabledRef.current && idx < parsedSentences.length
+            ? "Translating..."
+            : clip.englishTranslation || EMPTY_ENGLISH,
+      }));
+
+      // Append extra sentences if parsed STT output exceeds initial segment count
+      if (parsedSentences.length > sentences.length) {
+        for (let idx = sentences.length; idx < parsedSentences.length; idx++) {
+          const lastClip = newClips[newClips.length - 1];
           const startTime = Number((lastClip ? lastClip.endTime + 0.3 : 0).toFixed(2));
           const endTime = Number(Math.min(duration || 999, startTime + 3.5).toFixed(2));
-          return {
+          newClips.push({
             id: `parsed-extra-${idx}`,
             index: idx,
-            frenchText: textLine,
+            frenchText: parsedSentences[idx],
             englishTranslation: englishPlaceholder(),
             startTime,
             endTime,
             showFrench: true,
             showEnglish: true,
-          };
+          });
         }
-      });
+      }
     } else if (audioBuffer) {
       // IF NO CLIPS EXIST YET: perform AI alignment with the audio
       try {
@@ -976,21 +1056,35 @@ export default function App() {
 
           {/* Right Column: Loop Mode Status & Transcript / STT Uploader */}
           <div className="lg:col-span-4 flex flex-col min-h-[320px] lg:min-h-0 space-y-3 overflow-hidden">
-            {/* Playback Loop Mode Card */}
+            {/* Internal Background Audio STT Card */}
             <div className="bg-[#141417] border border-white/5 p-3.5 rounded-xl space-y-2 shrink-0">
               <div className="flex items-center justify-between text-xs font-bold uppercase tracking-widest">
-                <span className="text-[#D4AF37]">Loop Practice</span>
-                <span className="text-white/40">{isLooping ? "Active" : "Paused"}</span>
+                <span className="text-[#D4AF37]">Audio STT Transcriber</span>
+                <span className={isInternalSTTTranscribing ? "text-[#D4AF37] font-mono animate-pulse" : "text-white/40"}>
+                  {isInternalSTTTranscribing ? `● ${sttProgressStatus}` : `${sentences.length} Segments`}
+                </span>
               </div>
               <button
-                onClick={() => setIsLooping(!isLooping)}
-                className={`w-full py-2.5 sm:py-2 rounded-md text-xs font-bold uppercase tracking-widest transition-colors ${
-                  isLooping
-                    ? "bg-[#D4AF37] text-black hover:bg-[#e2c154]"
-                    : "bg-white/10 text-white hover:bg-white/20"
+                onClick={handleRunInternalAudioSTT}
+                disabled={isInternalSTTTranscribing || !audioBuffer}
+                className={`w-full py-2.5 sm:py-2.5 rounded-md text-xs font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:pointer-events-none ${
+                  isInternalSTTTranscribing
+                    ? "bg-[#D4AF37]/20 border border-[#D4AF37]/50 text-[#D4AF37]"
+                    : "bg-[#D4AF37] hover:bg-[#e2c154] text-black shadow-md"
                 }`}
+                title="Process uploaded audio file in the background and assign transcribed French text to each long-pause segment card"
               >
-                {isLooping ? "Looping Enabled" : "Enable Looping"}
+                {isInternalSTTTranscribing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-[#D4AF37]" />
+                    <span>Transcribing {sttProgressStatus}</span>
+                  </>
+                ) : (
+                  <>
+                    <Cpu className="w-4 h-4" />
+                    <span>Transcribe Audio & Assign Sentences</span>
+                  </>
+                )}
               </button>
             </div>
 

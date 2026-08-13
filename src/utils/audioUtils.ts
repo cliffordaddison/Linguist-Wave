@@ -54,20 +54,22 @@ export function extractWaveformPeaks(buffer: AudioBuffer, samplesCount: number =
 
 /**
  * Automatic Pause/Silence Detection
- * Scans channel data for quiet sections (< threshold for > minSilenceDuration)
+ * Scans channel data for quiet sections (long pauses) to detect true sentence endings.
  * Returns timestamp slice segments [ { startTime, endTime } ]
  */
 export function detectPauseSegments(
   buffer: AudioBuffer,
-  minSilenceSecs = 0.5,
-  silenceThreshold = 0.03
+  minSilenceSecs = 0.85,
+  silenceThreshold = 0.025
 ): { startTime: number; endTime: number }[] {
   const raw = buffer.getChannelData(0);
   const sampleRate = buffer.sampleRate;
   const frameSize = Math.floor(sampleRate * 0.02); // 20ms frames
   const totalFrames = Math.floor(raw.length / frameSize);
 
+  // Compute frame RMS energies and track peak volume
   const frameEnergies: number[] = [];
+  let maxEnergy = 0.0001;
   for (let f = 0; f < totalFrames; f++) {
     let sumSq = 0;
     const offset = f * frameSize;
@@ -77,18 +79,22 @@ export function detectPauseSegments(
     }
     const rms = Math.sqrt(sumSq / frameSize);
     frameEnergies.push(rms);
+    if (rms > maxEnergy) maxEnergy = rms;
   }
 
-  // Find non-silent speech blocks
+  // Calculate effective silence threshold scaled to peak audio energy
+  const effectiveThreshold = Math.max(0.015, Math.min(silenceThreshold, maxEnergy * 0.12));
+
+  // Find speech blocks separated by long pauses
   const minSilenceFrames = Math.floor(minSilenceSecs / 0.02);
-  const segments: { startTime: number; endTime: number }[] = [];
+  const rawSegments: { startTime: number; endTime: number }[] = [];
 
   let inSpeech = false;
   let speechStartFrame = 0;
   let silenceFrameCount = 0;
 
   for (let f = 0; f < frameEnergies.length; f++) {
-    const isSilent = frameEnergies[f] < silenceThreshold;
+    const isSilent = frameEnergies[f] < effectiveThreshold;
 
     if (!inSpeech) {
       if (!isSilent) {
@@ -100,13 +106,13 @@ export function detectPauseSegments(
       if (isSilent) {
         silenceFrameCount++;
         if (silenceFrameCount >= minSilenceFrames) {
-          // End of phrase
+          // End of phrase (after a true long pause)
           const endFrame = f - silenceFrameCount;
-          const startSec = Math.max(0, (speechStartFrame * frameSize) / sampleRate - 0.1);
-          const endSec = Math.min(buffer.duration, (endFrame * frameSize) / sampleRate + 0.1);
+          const startSec = Math.max(0, (speechStartFrame * frameSize) / sampleRate - 0.15);
+          const endSec = Math.min(buffer.duration, (endFrame * frameSize) / sampleRate + 0.15);
 
-          if (endSec - startSec >= 0.8) {
-            segments.push({ startTime: startSec, endTime: endSec });
+          if (endSec - startSec >= 1.0) {
+            rawSegments.push({ startTime: startSec, endTime: endSec });
           }
           inSpeech = false;
           silenceFrameCount = 0;
@@ -119,20 +125,42 @@ export function detectPauseSegments(
 
   // Handle final segment if ends during speech
   if (inSpeech) {
-    const startSec = Math.max(0, (speechStartFrame * frameSize) / sampleRate - 0.1);
+    const startSec = Math.max(0, (speechStartFrame * frameSize) / sampleRate - 0.15);
     const endSec = buffer.duration;
-    if (endSec - startSec >= 0.8) {
-      segments.push({ startTime: startSec, endTime: endSec });
+    if (endSec - startSec >= 1.0) {
+      rawSegments.push({ startTime: startSec, endTime: endSec });
     }
   }
 
-  // Fallback if no pauses detected
-  if (segments.length === 0) {
-    const dur = buffer.duration;
-    segments.push({ startTime: 0, endTime: dur });
+  // Fallback if no long pauses detected
+  if (rawSegments.length === 0) {
+    return [{ startTime: 0, endTime: Number(buffer.duration.toFixed(2)) }];
   }
 
-  return segments;
+  // Merge adjacent speech blocks separated by short gaps (< 0.8s) to avoid useless micro-segmentation
+  const merged: { startTime: number; endTime: number }[] = [];
+  let current = { ...rawSegments[0] };
+
+  for (let i = 1; i < rawSegments.length; i++) {
+    const next = rawSegments[i];
+    const gap = next.startTime - current.endTime;
+    if (gap < 0.8) {
+      // Merge into a single continuous sentence segment
+      current.endTime = next.endTime;
+    } else {
+      merged.push({
+        startTime: Number(current.startTime.toFixed(2)),
+        endTime: Number(current.endTime.toFixed(2)),
+      });
+      current = { ...next };
+    }
+  }
+  merged.push({
+    startTime: Number(current.startTime.toFixed(2)),
+    endTime: Number(current.endTime.toFixed(2)),
+  });
+
+  return merged;
 }
 
 /**
@@ -216,8 +244,8 @@ export function audioBufferToBase64Wav(buffer: AudioBuffer): string {
   const bitDepth = 16;
   const channelData = buffer.getChannelData(0);
 
-  // Limit to max 120s of audio for optimal STT performance
-  const maxSamples = Math.min(channelData.length, sampleRate * 120);
+  // Allow up to 300s (5 minutes) of audio for STT transcription
+  const maxSamples = Math.min(channelData.length, sampleRate * 300);
   const dataLength = maxSamples * 2;
   const bufferLength = 44 + dataLength;
   const arrayBuffer = new ArrayBuffer(bufferLength);
@@ -255,5 +283,32 @@ export function audioBufferToBase64Wav(buffer: AudioBuffer): string {
     binary += String.fromCharCode(bytes[i]);
   }
   return btoa(binary);
+}
+
+/**
+ * Extract a sub-slice of an AudioBuffer between startSec and endSec
+ */
+export function sliceAudioBuffer(
+  buffer: AudioBuffer,
+  startSec: number,
+  endSec: number
+): AudioBuffer {
+  const ctx = getAudioContext();
+  const sampleRate = buffer.sampleRate;
+  const startFrame = Math.max(0, Math.floor(startSec * sampleRate));
+  const endFrame = Math.min(buffer.length, Math.floor(endSec * sampleRate));
+  const frameCount = Math.max(1, endFrame - startFrame);
+
+  const subBuffer = ctx.createBuffer(buffer.numberOfChannels, frameCount, sampleRate);
+
+  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+    const sourceData = buffer.getChannelData(channel);
+    const subData = subBuffer.getChannelData(channel);
+    for (let i = 0; i < frameCount; i++) {
+      subData[i] = sourceData[startFrame + i];
+    }
+  }
+
+  return subBuffer;
 }
 

@@ -70,6 +70,10 @@ export const TranscriptUploader: React.FC<TranscriptUploaderProps> = ({
 
       rec.onend = () => {
         setIsListeningDictation(false);
+        // Automatically populate French STT text into respective audio segments
+        if (text.trim()) {
+          handleApplyText();
+        }
       };
 
       recognitionRef.current = rec;
