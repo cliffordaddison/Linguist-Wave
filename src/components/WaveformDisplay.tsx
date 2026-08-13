@@ -222,15 +222,17 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
     onSeek(Math.max(0, Math.min(safeDuration, clickedTime)));
   };
 
-  // Percentages for HTML Yellow Slicer Box positioning
-  const leftPct = (sliceStart / safeDuration) * 100;
-  const rightPct = (sliceEnd / safeDuration) * 100;
-  const widthPct = Math.max(0.5, rightPct - leftPct);
+  // Percentages for HTML Yellow Slicer Box positioning (strictly clamped 0-100%)
+  const safeStart = Math.max(0, Math.min(sliceStart, safeDuration));
+  const safeEnd = Math.max(safeStart, Math.min(sliceEnd, safeDuration));
+  const leftPct = Math.max(0, Math.min(100, (safeStart / safeDuration) * 100));
+  const rightPct = Math.max(leftPct, Math.min(100, (safeEnd / safeDuration) * 100));
+  const widthPct = Math.max(0, Math.min(100 - leftPct, rightPct - leftPct));
 
   return (
-    <div className="w-full bg-[#141417] border border-white/5 rounded-xl p-4 sm:p-6 shadow-2xl relative select-none">
+    <div className="w-full max-w-full bg-[#141417] border border-white/5 rounded-xl p-3.5 sm:p-5 shadow-2xl relative select-none overflow-hidden">
       {/* Top Header Bar with Timestamp & Controls */}
-      <div className="flex flex-wrap items-center justify-between mb-3 text-xs sm:text-sm text-white/50 gap-2">
+      <div className="flex flex-wrap items-center justify-between mb-2.5 text-xs sm:text-sm text-white/50 gap-2">
         <div className="flex items-center gap-2">
           <span className="text-[10px] uppercase tracking-wider font-semibold text-[#D4AF37] bg-[#D4AF37]/10 px-2.5 py-0.5 rounded">
             Master Waveform
@@ -243,31 +245,35 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
         </div>
 
         {/* Timestamp Readout */}
-        <div className="flex flex-wrap items-center gap-2 sm:gap-4 font-mono text-xs">
-          <div className="bg-[#0A0A0B] border border-white/10 px-3 py-1 rounded-md text-white/70">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 font-mono text-xs">
+          <div className="bg-[#0A0A0B] border border-white/10 px-2.5 py-1 rounded-md text-white/70">
             Slice: <span className="text-[#D4AF37] font-bold">{formatTime(sliceStart, true)}</span> -{" "}
             <span className="text-[#D4AF37] font-bold">{formatTime(sliceEnd, true)}</span>{" "}
             <span className="text-white/40">({(sliceEnd - sliceStart).toFixed(1)}s)</span>
           </div>
 
-          <div className="bg-[#0A0A0B] border border-white/10 px-3 py-1 rounded-md text-white/70">
+          <div className="bg-[#0A0A0B] border border-white/10 px-2.5 py-1 rounded-md text-white/70">
             <span className="text-white font-bold">{formatTime(currentTime)}</span> /{" "}
             <span>{formatTime(safeDuration)}</span>
           </div>
         </div>
       </div>
 
-      {/* Waveform Container */}
+      {/* Waveform Container - Strictly Contained */}
       <div
         ref={containerRef}
         onClick={handleCanvasClick}
-        className={`relative w-full h-[110px] sm:h-[140px] rounded-lg overflow-hidden cursor-pointer bg-[#0A0A0B] border border-white/5 shadow-inner group ${
+        className={`relative w-full max-w-full h-[110px] sm:h-[130px] rounded-lg overflow-hidden cursor-pointer bg-[#0A0A0B] border border-white/5 shadow-inner group ${
           isDragging ? "touch-none" : ""
         }`}
         style={isDragging ? { touchAction: "none" } : undefined}
       >
         {/* Canvas Waveform Render */}
-        <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 w-full h-full pointer-events-none"
+          style={{ width: "100%", height: "100%" }}
+        />
 
         {/* OVERLAY: Gold Dynamic Slicer Frame & Drag Handles */}
         <div
@@ -276,7 +282,7 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
             width: `${widthPct}%`,
             touchAction: "none",
           }}
-          className="absolute top-0 bottom-[24px] border-2 border-[#D4AF37] bg-[#D4AF37]/10 shadow-[0_0_15px_rgba(212,175,55,0.3)] rounded flex items-center justify-between z-10 transition-shadow hover:shadow-[0_0_20px_rgba(212,175,55,0.5)]"
+          className="absolute top-0 bottom-[24px] border-2 border-[#D4AF37] bg-[#D4AF37]/10 shadow-[0_0_12px_rgba(212,175,55,0.25)] rounded flex items-center justify-between z-10 transition-shadow hover:shadow-[0_0_18px_rgba(212,175,55,0.4)]"
         >
           {/* Draggable Center Body */}
           <div
@@ -292,27 +298,27 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
             </div>
           </div>
 
-          {/* Left Handle — wide invisible hit pad, thin visible bar */}
+          {/* Left Handle — Contained within waveform bounds */}
           <div
             onPointerDown={(e) => handlePointerDown(e, "left")}
-            className="absolute -left-4 top-0 bottom-0 w-10 flex items-center justify-center cursor-ew-resize z-20"
+            className="absolute left-0 top-0 bottom-0 w-6 -translate-x-1/2 flex items-center justify-center cursor-ew-resize z-20"
             title="Drag left to adjust start time"
             style={{ touchAction: "none" }}
           >
-            <div className="w-3.5 h-full bg-[#D4AF37] hover:bg-[#e2c154] rounded-l shadow-md flex items-center justify-center transition-colors">
-              <div className="w-0.5 h-6 bg-black/60 rounded-full"></div>
+            <div className="w-2.5 h-full bg-[#D4AF37] hover:bg-[#e2c154] rounded-l shadow-md flex items-center justify-center transition-colors">
+              <div className="w-0.5 h-5 bg-black/60 rounded-full"></div>
             </div>
           </div>
 
-          {/* Right Handle — wide invisible hit pad, thin visible bar */}
+          {/* Right Handle — Contained within waveform bounds */}
           <div
             onPointerDown={(e) => handlePointerDown(e, "right")}
-            className="absolute -right-4 top-0 bottom-0 w-10 flex items-center justify-center cursor-ew-resize z-20"
+            className="absolute right-0 top-0 bottom-0 w-6 translate-x-1/2 flex items-center justify-center cursor-ew-resize z-20"
             title="Drag right to adjust end time"
             style={{ touchAction: "none" }}
           >
-            <div className="w-3.5 h-full bg-[#D4AF37] hover:bg-[#e2c154] rounded-r shadow-md flex items-center justify-center transition-colors">
-              <div className="w-0.5 h-6 bg-black/60 rounded-full"></div>
+            <div className="w-2.5 h-full bg-[#D4AF37] hover:bg-[#e2c154] rounded-r shadow-md flex items-center justify-center transition-colors">
+              <div className="w-0.5 h-5 bg-black/60 rounded-full"></div>
             </div>
           </div>
         </div>

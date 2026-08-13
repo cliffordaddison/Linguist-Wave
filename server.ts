@@ -52,11 +52,13 @@ app.post("/api/transcribe-audio", async (req, res) => {
             },
           },
           {
-            text: `Listen to this French audio recording carefully.
-1. Perform Speech-to-Text (STT) transcribing each French sentence spoken.
-2. Translate each French sentence into clean English.
-3. Estimate accurate startTime and endTime timestamps (in seconds) for each sentence.
-Return a JSON array of sentences.`,
+            text: `Listen to this French audio recording carefully and transcribe ALL spoken words.
+1. Perform Speech-to-Text (STT) transcribing EVERY spoken French word verbatim without missing any words.
+2. Group the transcribed French words into natural, full continuous sentences and thoughts.
+3. CRUCIAL SEGMENTATION RULE: Do NOT break a sentence after conjunctions or connecting words like 'et', 'mais', 'ou', 'donc', 'car', 'puis', 'parce que', 'alors', 'cependant', 'néanmoins', etc. Keep the connector attached to the sentence/clause it belongs to so the thought is continuous and complete!
+4. Estimate accurate startTime and endTime timestamps (in seconds) for each sentence segment covering the full audio file from start to finish.
+5. Provide a direct English translation for each sentence segment.
+Return a JSON array of sentence objects.`,
           },
         ],
         config: {

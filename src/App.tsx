@@ -472,33 +472,8 @@ export default function App() {
       setWaveformPeaks(extractWaveformPeaks(decodedBuffer, 800));
       setCurrentAudioName(file.name);
 
-      // Dynamically detect sentence clips from audio pauses so section-by-section playback works immediately
-      const pauseSegments = detectPauseSegments(decodedBuffer);
-      const autoClips: SentenceClip[] = pauseSegments.map((seg, idx) => ({
-        id: `auto-${idx}`,
-        index: idx,
-        frenchText: `Section #${idx + 1}`,
-        englishTranslation: `Audio Segment #${idx + 1}`,
-        startTime: Number(seg.startTime.toFixed(2)),
-        endTime: Number(seg.endTime.toFixed(2)),
-        showFrench: true,
-        showEnglish: true,
-      }));
-
-      setSentences(autoClips);
-      if (autoClips.length > 0) {
-        setActiveSentenceIndex(0);
-        setSliceStart(autoClips[0].startTime);
-        setSliceEnd(autoClips[0].endTime);
-        setCurrentTime(autoClips[0].startTime);
-      } else {
-        setActiveSentenceIndex(null);
-        setSliceStart(0);
-        setSliceEnd(Math.min(5, decodedBuffer.duration));
-        setCurrentTime(0);
-      }
-
-      setCurrentTranscript("");
+      // Automatically run Speech-to-Text (STT) on the uploaded French audio file!
+      handleAutoTranscribeSTT(decodedBuffer);
     } catch (err) {
       alert("Error decoding audio file. Please ensure it is a valid audio format.");
     }
@@ -553,12 +528,13 @@ export default function App() {
 
   const englishPlaceholder = () => (aiTranslateEnabledRef.current ? "Translating..." : EMPTY_ENGLISH);
 
-  // Auto-Detect Speech using Gemini STT API freely without transcript
-  const handleAutoTranscribeSTT = async () => {
-    if (!audioBuffer) return;
+  // Auto-Detect Speech using Gemini STT API directly on the uploaded audio buffer
+  const handleAutoTranscribeSTT = async (bufferToTranscribe?: AudioBuffer) => {
+    const targetBuffer = bufferToTranscribe || audioBuffer;
+    if (!targetBuffer) return;
     setIsTranscribingSTT(true);
     try {
-      const base64Wav = audioBufferToBase64Wav(audioBuffer);
+      const base64Wav = audioBufferToBase64Wav(targetBuffer);
       const res = await fetch("/api/transcribe-audio", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -571,7 +547,7 @@ export default function App() {
           id: `stt-${idx}`,
           index: idx,
           frenchText: s.frenchText || `Phrase #${idx + 1}`,
-          englishTranslation: s.englishTranslation || englishPlaceholder(),
+          englishTranslation: aiTranslateEnabledRef.current ? (s.englishTranslation || "Translating...") : EMPTY_ENGLISH,
           startTime: Number((s.startTime || idx * 4).toFixed(2)),
           endTime: Number((s.endTime || (idx + 1) * 4).toFixed(2)),
           showFrench: true,
@@ -586,11 +562,11 @@ export default function App() {
           maybeTranslateClips(clips);
         }
       } else {
-        handleAutoAlignSentences();
+        handleAutoAlignSentences(targetBuffer);
       }
     } catch (err) {
       console.error("STT Error:", err);
-      handleAutoAlignSentences();
+      handleAutoAlignSentences(targetBuffer);
     } finally {
       setIsTranscribingSTT(false);
     }
@@ -635,10 +611,11 @@ export default function App() {
   };
 
   // Auto-Align Sentences with Audio Pauses
-  const handleAutoAlignSentences = () => {
-    if (!audioBuffer) return;
+  const handleAutoAlignSentences = (bufferToUse?: AudioBuffer) => {
+    const targetBuf = bufferToUse || audioBuffer;
+    if (!targetBuf) return;
 
-    const pauseSegments = detectPauseSegments(audioBuffer);
+    const pauseSegments = detectPauseSegments(targetBuf);
     const localSentences = splitFrenchSentences(currentTranscript);
     const rawLines =
       localSentences.length > 0
