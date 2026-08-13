@@ -17,21 +17,6 @@ const EMPTY_ENGLISH = "—";
 const AI_TRANSLATE_STORAGE_KEY = "lw-ai-translate";
 
 export default function App() {
-  // #region agent log
-  fetch("http://127.0.0.1:7526/ingest/874b278f-a88a-47bd-bce0-8e50d0fe1f30", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "033511" },
-    body: JSON.stringify({
-      sessionId: "033511",
-      runId: "blank-screen",
-      hypothesisId: "A",
-      location: "App.tsx:render-start",
-      message: "App render start",
-      data: {},
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
   // Audio state
   const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null);
   const [waveformPeaks, setWaveformPeaks] = useState<number[]>([]);
@@ -113,155 +98,6 @@ export default function App() {
   useEffect(() => {
     aiTranslateEnabledRef.current = aiTranslateEnabled;
   }, [aiTranslateEnabled]);
-
-  // Create persistent audio element; revoke object URLs on unmount
-  useEffect(() => {
-    const el = new Audio();
-    el.preload = "auto";
-    audioElRef.current = el;
-    return () => {
-      el.pause();
-      if (animFrameRef.current) {
-        cancelAnimationFrame(animFrameRef.current);
-      }
-      if (objectUrlRef.current) {
-        URL.revokeObjectURL(objectUrlRef.current);
-        objectUrlRef.current = null;
-      }
-      audioElRef.current = null;
-    };
-  }, []);
-
-  // Keep screen awake while audio is playing
-  useEffect(() => {
-    const releaseWakeLock = async () => {
-      try {
-        await wakeLockRef.current?.release();
-      } catch {
-        /* ignore */
-      }
-      wakeLockRef.current = null;
-    };
-
-    const requestWakeLock = async () => {
-      if (!isPlaying || typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
-      try {
-        wakeLockRef.current = await navigator.wakeLock.request("screen");
-        wakeLockRef.current.addEventListener("release", () => {
-          wakeLockRef.current = null;
-        });
-      } catch {
-        wakeLockRef.current = null;
-      }
-    };
-
-    if (isPlaying) {
-      requestWakeLock();
-    } else {
-      releaseWakeLock();
-    }
-
-    const onVisibility = () => {
-      documentHiddenRef.current = document.hidden;
-      if (!document.hidden && isPlayingRef.current) {
-        requestWakeLock();
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      releaseWakeLock();
-    };
-  }, [isPlaying]);
-
-  // #region agent log
-  fetch("http://127.0.0.1:7526/ingest/874b278f-a88a-47bd-bce0-8e50d0fe1f30", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "033511" },
-    body: JSON.stringify({
-      sessionId: "033511",
-      runId: "blank-screen",
-      hypothesisId: "A",
-      location: "App.tsx:before-media-session-effect",
-      message: "about to register mediaSession effect",
-      data: { playAudioRangeType: typeof playAudioRange, stopAudioType: typeof stopAudio },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
-  // Media Session so mobile OS can keep the audio session alive
-  useEffect(() => {
-    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
-
-    const title =
-      activeSentenceIndex !== null && sentences[activeSentenceIndex]
-        ? `Clip ${activeSentenceIndex + 1} · ${sentences[activeSentenceIndex].frenchText.slice(0, 60)}`
-        : currentAudioName || "Linguist Wave";
-
-    try {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title,
-        artist: "Linguist Wave",
-        album: currentAudioName || "French practice",
-      });
-      navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
-    } catch {
-      /* ignore unsupported metadata */
-    }
-
-    try {
-      navigator.mediaSession.setActionHandler("play", () => {
-        if (!isPlayingRef.current) {
-          const clips = sentencesRef.current;
-          const idx = activeSentenceIndexRef.current;
-          if (idx !== null && clips[idx]) {
-            playAudioRange(clips[idx].startTime, clips[idx].endTime);
-          } else {
-            playAudioRange(sliceRangeRef.current.start, sliceRangeRef.current.end);
-          }
-        }
-      });
-      navigator.mediaSession.setActionHandler("pause", () => {
-        stopAudio();
-      });
-      navigator.mediaSession.setActionHandler("nexttrack", () => {
-        const clips = sentencesRef.current;
-        const idx = activeSentenceIndexRef.current;
-        if (!clips.length) return;
-        const next = idx === null ? 0 : Math.min(idx + 1, clips.length - 1);
-        const clip = clips[next];
-        if (!clip) return;
-        playAllNavigatingRef.current = true;
-        activeSentenceIndexRef.current = next;
-        setActiveSentenceIndex(next);
-        setSliceStart(clip.startTime);
-        setSliceEnd(clip.endTime);
-        if (isPlayingRef.current) {
-          playAudioRange(clip.startTime, clip.endTime);
-        }
-        playAllNavigatingRef.current = false;
-      });
-      navigator.mediaSession.setActionHandler("previoustrack", () => {
-        const clips = sentencesRef.current;
-        const idx = activeSentenceIndexRef.current;
-        if (!clips.length) return;
-        const prev = idx === null ? 0 : Math.max(idx - 1, 0);
-        const clip = clips[prev];
-        if (!clip) return;
-        playAllNavigatingRef.current = true;
-        activeSentenceIndexRef.current = prev;
-        setActiveSentenceIndex(prev);
-        setSliceStart(clip.startTime);
-        setSliceEnd(clip.endTime);
-        if (isPlayingRef.current) {
-          playAudioRange(clip.startTime, clip.endTime);
-        }
-        playAllNavigatingRef.current = false;
-      });
-    } catch {
-      /* ignore unsupported handlers */
-    }
-  }, [isPlaying, currentAudioName, activeSentenceIndex, sentences, playAudioRange, stopAudio]);
 
   const clearPlayAll = useCallback(() => {
     isPlayingAllRef.current = false;
@@ -395,6 +231,140 @@ export default function App() {
   useEffect(() => {
     advancePlayAllRef.current = advancePlayAll;
   }, [advancePlayAll]);
+
+  // Create persistent audio element; revoke object URLs on unmount
+  useEffect(() => {
+    const el = new Audio();
+    el.preload = "auto";
+    audioElRef.current = el;
+    return () => {
+      el.pause();
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+      }
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = null;
+      }
+      audioElRef.current = null;
+    };
+  }, []);
+
+  // Keep screen awake while audio is playing
+  useEffect(() => {
+    const releaseWakeLock = async () => {
+      try {
+        await wakeLockRef.current?.release();
+      } catch {
+        /* ignore */
+      }
+      wakeLockRef.current = null;
+    };
+
+    const requestWakeLock = async () => {
+      if (!isPlaying || typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
+      try {
+        wakeLockRef.current = await navigator.wakeLock.request("screen");
+        wakeLockRef.current.addEventListener("release", () => {
+          wakeLockRef.current = null;
+        });
+      } catch {
+        wakeLockRef.current = null;
+      }
+    };
+
+    if (isPlaying) {
+      requestWakeLock();
+    } else {
+      releaseWakeLock();
+    }
+
+    const onVisibility = () => {
+      documentHiddenRef.current = document.hidden;
+      if (!document.hidden && isPlayingRef.current) {
+        requestWakeLock();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      releaseWakeLock();
+    };
+  }, [isPlaying]);
+
+  // Media Session so mobile OS can keep the audio session alive
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+
+    const title =
+      activeSentenceIndex !== null && sentences[activeSentenceIndex]
+        ? `Clip ${activeSentenceIndex + 1} · ${sentences[activeSentenceIndex].frenchText.slice(0, 60)}`
+        : currentAudioName || "Linguist Wave";
+
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title,
+        artist: "Linguist Wave",
+        album: currentAudioName || "French practice",
+      });
+      navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
+    } catch {
+      /* ignore unsupported metadata */
+    }
+
+    try {
+      navigator.mediaSession.setActionHandler("play", () => {
+        if (!isPlayingRef.current) {
+          const clips = sentencesRef.current;
+          const idx = activeSentenceIndexRef.current;
+          if (idx !== null && clips[idx]) {
+            playAudioRange(clips[idx].startTime, clips[idx].endTime);
+          } else {
+            playAudioRange(sliceRangeRef.current.start, sliceRangeRef.current.end);
+          }
+        }
+      });
+      navigator.mediaSession.setActionHandler("pause", () => {
+        stopAudio();
+      });
+      navigator.mediaSession.setActionHandler("nexttrack", () => {
+        const clips = sentencesRef.current;
+        const idx = activeSentenceIndexRef.current;
+        if (!clips.length) return;
+        const next = idx === null ? 0 : Math.min(idx + 1, clips.length - 1);
+        const clip = clips[next];
+        if (!clip) return;
+        playAllNavigatingRef.current = true;
+        activeSentenceIndexRef.current = next;
+        setActiveSentenceIndex(next);
+        setSliceStart(clip.startTime);
+        setSliceEnd(clip.endTime);
+        if (isPlayingRef.current) {
+          playAudioRange(clip.startTime, clip.endTime);
+        }
+        playAllNavigatingRef.current = false;
+      });
+      navigator.mediaSession.setActionHandler("previoustrack", () => {
+        const clips = sentencesRef.current;
+        const idx = activeSentenceIndexRef.current;
+        if (!clips.length) return;
+        const prev = idx === null ? 0 : Math.max(idx - 1, 0);
+        const clip = clips[prev];
+        if (!clip) return;
+        playAllNavigatingRef.current = true;
+        activeSentenceIndexRef.current = prev;
+        setActiveSentenceIndex(prev);
+        setSliceStart(clip.startTime);
+        setSliceEnd(clip.endTime);
+        if (isPlayingRef.current) {
+          playAudioRange(clip.startTime, clip.endTime);
+        }
+        playAllNavigatingRef.current = false;
+      });
+    } catch {
+      /* ignore unsupported handlers */
+    }
+  }, [isPlaying, currentAudioName, activeSentenceIndex, sentences, playAudioRange, stopAudio]);
 
   const startPlayAll = useCallback(() => {
     if (!audioBuffer || sentencesRef.current.length === 0) return;
@@ -929,21 +899,6 @@ export default function App() {
     });
   };
 
-  // #region agent log
-  fetch("http://127.0.0.1:7526/ingest/874b278f-a88a-47bd-bce0-8e50d0fe1f30", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "033511" },
-    body: JSON.stringify({
-      sessionId: "033511",
-      runId: "blank-screen",
-      hypothesisId: "C",
-      location: "App.tsx:before-return",
-      message: "App reached JSX return",
-      data: { vw: typeof window !== "undefined" ? window.innerWidth : 0, vh: typeof window !== "undefined" ? window.innerHeight : 0 },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
   return (
     <div className="min-h-dvh h-dvh max-h-dvh w-full overflow-hidden bg-[#0A0A0B] text-[#E0E0E0] font-sans antialiased selection:bg-[#D4AF37] selection:text-black flex flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
       {/* Top Navigation Bar with LinguistWave + Upload Audio Button on the right */}
