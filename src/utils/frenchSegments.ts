@@ -3,8 +3,10 @@ import { SentenceClip } from "../types";
 const CONNECTORS = [
   "et puis",
   "et alors",
+  "et donc",
   "et",
   "mais",
+  "ou bien",
   "ou",
   "donc",
   "car",
@@ -13,9 +15,35 @@ const CONNECTORS = [
   "pourtant",
   "néanmoins",
   "neanmoins",
+  "en effet",
+  "par conséquent",
+  "c'est pourquoi",
+  "afin que",
+  "afin qu'",
+  "parce que",
+  "parce qu'",
+  "alors que",
+  "alors qu'",
+  "tandis que",
+  "tandis qu'",
+  "bien que",
+  "bien qu'",
+  "puisque",
+  "puisqu'",
+  "lorsque",
+  "lorsqu'",
+  "quand",
+  "comme",
+  "si",
+  "que",
+  "qu'",
+  "qui",
+  "dont",
+  "où",
 ];
 
 const TERMINAL_PUNCT = /[.!?…]+$/;
+const CONTINUING_PUNCT = /[,;:—\-\s]+$/;
 const CONNECTOR_START = new RegExp(
   `^(${CONNECTORS.map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`,
   "i"
@@ -25,12 +53,17 @@ function normalizeFragment(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-function startsWithConnector(text: string): boolean {
-  return CONNECTOR_START.test(normalizeFragment(text));
+export function startsWithConnector(text: string): boolean {
+  const norm = normalizeFragment(text);
+  return CONNECTOR_START.test(norm) || /^[a-zàâæçéèêëîïôœùûüÿ]/.test(norm);
 }
 
-function hasTerminalPunctuation(text: string): boolean {
+export function hasTerminalPunctuation(text: string): boolean {
   return TERMINAL_PUNCT.test(normalizeFragment(text));
+}
+
+export function hasContinuingPunctuation(text: string): boolean {
+  return CONTINUING_PUNCT.test(text.trim());
 }
 
 /**
@@ -60,7 +93,7 @@ export function splitFrenchSentences(raw: string): string[] {
         continue;
       }
 
-      if (startsWithConnector(piece) || !hasTerminalPunctuation(current)) {
+      if (startsWithConnector(piece) || !hasTerminalPunctuation(current) || hasContinuingPunctuation(current)) {
         current = `${current} ${piece}`;
         continue;
       }
@@ -92,13 +125,23 @@ export function mergeContinuationClips(clips: SentenceClip[]): SentenceClip[] {
     const text = normalizeFragment(clip.frenchText || "");
     const prevText = prev ? normalizeFragment(prev.frenchText || "") : "";
 
+    const isPlaceholder =
+      /^section\s*#/i.test(text) ||
+      /^audio segment\s*#/i.test(text) ||
+      /^phrase\s*#/i.test(text);
+
+    const prevPlaceholder =
+      /^section\s*#/i.test(prevText) ||
+      /^audio segment\s*#/i.test(prevText) ||
+      /^phrase\s*#/i.test(prevText);
+
     const shouldMerge =
       !!prev &&
       text.length > 0 &&
-      !/^section\s*#/i.test(text) &&
-      !/^audio segment\s*#/i.test(text) &&
-      !/^phrase\s*#/i.test(text) &&
-      (startsWithConnector(text) || (prevText.length > 0 && !hasTerminalPunctuation(prevText) && !/^section\s*#/i.test(prevText)));
+      !isPlaceholder &&
+      (startsWithConnector(text) ||
+        (prevText.length > 0 && !hasTerminalPunctuation(prevText) && !prevPlaceholder) ||
+        hasContinuingPunctuation(prevText));
 
     if (shouldMerge && prev) {
       prev.frenchText = `${prevText} ${text}`.trim();
@@ -119,3 +162,4 @@ export function mergeContinuationClips(clips: SentenceClip[]): SentenceClip[] {
 
   return merged.map((clip, index) => ({ ...clip, index }));
 }
+

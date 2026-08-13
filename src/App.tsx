@@ -250,7 +250,7 @@ export default function App() {
     };
   }, []);
 
-  // Keep screen awake while audio is playing
+  // Keep screen awake while using the app
   useEffect(() => {
     const releaseWakeLock = async () => {
       try {
@@ -262,35 +262,34 @@ export default function App() {
     };
 
     const requestWakeLock = async () => {
-      if (!isPlaying || typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
+      if (typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
       try {
-        wakeLockRef.current = await navigator.wakeLock.request("screen");
-        wakeLockRef.current.addEventListener("release", () => {
-          wakeLockRef.current = null;
-        });
+        if (!wakeLockRef.current) {
+          wakeLockRef.current = await navigator.wakeLock.request("screen");
+          wakeLockRef.current.addEventListener("release", () => {
+            wakeLockRef.current = null;
+          });
+        }
       } catch {
         wakeLockRef.current = null;
       }
     };
 
-    if (isPlaying) {
-      requestWakeLock();
-    } else {
-      releaseWakeLock();
-    }
+    requestWakeLock();
 
     const onVisibility = () => {
       documentHiddenRef.current = document.hidden;
-      if (!document.hidden && isPlayingRef.current) {
+      if (!document.hidden) {
         requestWakeLock();
       }
     };
+
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
       releaseWakeLock();
     };
-  }, [isPlaying]);
+  }, []);
 
   // Media Session so mobile OS can keep the audio session alive
   useEffect(() => {
