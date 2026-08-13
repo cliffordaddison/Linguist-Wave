@@ -14,6 +14,7 @@ import {
   Edit3,
   Check,
   BookOpen,
+  Sparkles,
 } from "lucide-react";
 
 interface SentenceListProps {
@@ -21,6 +22,8 @@ interface SentenceListProps {
   activeSentenceIndex: number | null;
   isPlaying: boolean;
   isLooping: boolean;
+  aiTranslateEnabled: boolean;
+  onToggleAiTranslate: (enabled: boolean) => void;
   onSelectSentence: (index: number, autoPlay?: boolean) => void;
   onToggleFrench: (index: number) => void;
   onToggleEnglish: (index: number) => void;
@@ -36,6 +39,8 @@ export const SentenceList: React.FC<SentenceListProps> = ({
   activeSentenceIndex,
   isPlaying,
   isLooping,
+  aiTranslateEnabled,
+  onToggleAiTranslate,
   onSelectSentence,
   onToggleFrench,
   onToggleEnglish,
@@ -144,6 +149,7 @@ export const SentenceList: React.FC<SentenceListProps> = ({
 
           {/* Master English Translation Toggle */}
           <button
+            type="button"
             onClick={handleMasterEnglishToggle}
             className={`flex items-center gap-1.5 min-h-9 px-2.5 py-1.5 rounded text-[11px] font-semibold border transition-all ${
               allEnglishState
@@ -153,6 +159,21 @@ export const SentenceList: React.FC<SentenceListProps> = ({
           >
             <Languages className="w-3 h-3 text-white/70" />
             <span>{allEnglishState ? "Hide Translation" : "Show Translation"}</span>
+          </button>
+
+          {/* Opt-in Gemini translation (off by default) */}
+          <button
+            type="button"
+            onClick={() => onToggleAiTranslate(!aiTranslateEnabled)}
+            className={`flex items-center gap-1.5 min-h-9 px-2.5 py-1.5 rounded text-[11px] font-semibold border transition-all ${
+              aiTranslateEnabled
+                ? "bg-[#D4AF37] border-[#D4AF37] text-black"
+                : "bg-white/5 border-white/10 text-white/50"
+            }`}
+            title="When on, Gemini translates French clips. Off uses no AI tokens."
+          >
+            <Sparkles className="w-3 h-3" />
+            <span>{aiTranslateEnabled ? "AI Translate On" : "AI Translate Off"}</span>
           </button>
 
           {/* Add Sentence Clip */}

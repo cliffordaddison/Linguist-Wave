@@ -6,11 +6,15 @@ import {
   detectPauseSegments,
   audioBufferToBase64Wav,
 } from "./utils/audioUtils";
+import { splitFrenchSentences, mergeContinuationClips } from "./utils/frenchSegments";
 import { WaveformDisplay } from "./components/WaveformDisplay";
 import { AudioControlBar } from "./components/AudioControlBar";
 import { SentenceList } from "./components/SentenceList";
 import { TranscriptUploader } from "./components/TranscriptUploader";
 import { UploadCloud } from "lucide-react";
+
+const EMPTY_ENGLISH = "—";
+const AI_TRANSLATE_STORAGE_KEY = "lw-ai-translate";
 
 export default function App() {
   // Audio state
@@ -21,6 +25,13 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isLooping, setIsLooping] = useState<boolean>(true); // default loop enabled
   const [isPlayingAll, setIsPlayingAll] = useState<boolean>(false);
+  const [aiTranslateEnabled, setAiTranslateEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(AI_TRANSLATE_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
   const [volume, setVolume] = useState<number>(0.9);
 
@@ -51,6 +62,9 @@ export default function App() {
   const activeSentenceIndexRef = useRef<number | null>(activeSentenceIndex);
   const playAllNavigatingRef = useRef<boolean>(false);
   const advancePlayAllRef = useRef<() => void>(() => {});
+  const aiTranslateEnabledRef = useRef<boolean>(aiTranslateEnabled);
+  const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
+  const documentHiddenRef = useRef<boolean>(typeof document !== "undefined" ? document.hidden : false);
 
   const isLoopingRef = useRef<boolean>(isLooping);
   useEffect(() => {
@@ -81,6 +95,10 @@ export default function App() {
     volumeRef.current = volume;
   }, [volume]);
 
+  useEffect(() => {
+    aiTranslateEnabledRef.current = aiTranslateEnabled;
+  }, [aiTranslateEnabled]);
+
   // Create persistent audio element; revoke object URLs on unmount
   useEffect(() => {
     const el = new Audio();
@@ -98,6 +116,122 @@ export default function App() {
       audioElRef.current = null;
     };
   }, []);
+
+  // Keep screen awake while audio is playing
+  useEffect(() => {
+    const releaseWakeLock = async () => {
+      try {
+        await wakeLockRef.current?.release();
+      } catch {
+        /* ignore */
+      }
+      wakeLockRef.current = null;
+    };
+
+    const requestWakeLock = async () => {
+      if (!isPlaying || typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
+      try {
+        wakeLockRef.current = await navigator.wakeLock.request("screen");
+        wakeLockRef.current.addEventListener("release", () => {
+          wakeLockRef.current = null;
+        });
+      } catch {
+        wakeLockRef.current = null;
+      }
+    };
+
+    if (isPlaying) {
+      requestWakeLock();
+    } else {
+      releaseWakeLock();
+    }
+
+    const onVisibility = () => {
+      documentHiddenRef.current = document.hidden;
+      if (!document.hidden && isPlayingRef.current) {
+        requestWakeLock();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      releaseWakeLock();
+    };
+  }, [isPlaying]);
+
+  // Media Session so mobile OS can keep the audio session alive
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+
+    const title =
+      activeSentenceIndex !== null && sentences[activeSentenceIndex]
+        ? `Clip ${activeSentenceIndex + 1} · ${sentences[activeSentenceIndex].frenchText.slice(0, 60)}`
+        : currentAudioName || "Linguist Wave";
+
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title,
+        artist: "Linguist Wave",
+        album: currentAudioName || "French practice",
+      });
+      navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
+    } catch {
+      /* ignore unsupported metadata */
+    }
+
+    try {
+      navigator.mediaSession.setActionHandler("play", () => {
+        if (!isPlayingRef.current) {
+          const clips = sentencesRef.current;
+          const idx = activeSentenceIndexRef.current;
+          if (idx !== null && clips[idx]) {
+            playAudioRange(clips[idx].startTime, clips[idx].endTime);
+          } else {
+            playAudioRange(sliceRangeRef.current.start, sliceRangeRef.current.end);
+          }
+        }
+      });
+      navigator.mediaSession.setActionHandler("pause", () => {
+        stopAudio();
+      });
+      navigator.mediaSession.setActionHandler("nexttrack", () => {
+        const clips = sentencesRef.current;
+        const idx = activeSentenceIndexRef.current;
+        if (!clips.length) return;
+        const next = idx === null ? 0 : Math.min(idx + 1, clips.length - 1);
+        const clip = clips[next];
+        if (!clip) return;
+        playAllNavigatingRef.current = true;
+        activeSentenceIndexRef.current = next;
+        setActiveSentenceIndex(next);
+        setSliceStart(clip.startTime);
+        setSliceEnd(clip.endTime);
+        if (isPlayingRef.current) {
+          playAudioRange(clip.startTime, clip.endTime);
+        }
+        playAllNavigatingRef.current = false;
+      });
+      navigator.mediaSession.setActionHandler("previoustrack", () => {
+        const clips = sentencesRef.current;
+        const idx = activeSentenceIndexRef.current;
+        if (!clips.length) return;
+        const prev = idx === null ? 0 : Math.max(idx - 1, 0);
+        const clip = clips[prev];
+        if (!clip) return;
+        playAllNavigatingRef.current = true;
+        activeSentenceIndexRef.current = prev;
+        setActiveSentenceIndex(prev);
+        setSliceStart(clip.startTime);
+        setSliceEnd(clip.endTime);
+        if (isPlayingRef.current) {
+          playAudioRange(clip.startTime, clip.endTime);
+        }
+        playAllNavigatingRef.current = false;
+      });
+    } catch {
+      /* ignore unsupported handlers */
+    }
+  }, [isPlaying, currentAudioName, activeSentenceIndex, sentences, playAudioRange, stopAudio]);
 
   const clearPlayAll = useCallback(() => {
     isPlayingAllRef.current = false;
@@ -152,7 +286,15 @@ export default function App() {
               advancePlayAllRef.current();
               return;
             }
-            if (isLoopingRef.current) {
+            // Screen off / background: continue to next segments even if Loop is on
+            const hidden = documentHiddenRef.current;
+            const clips = sentencesRef.current;
+            const currentIdx = activeSentenceIndexRef.current ?? 0;
+            if (hidden && clips.length > 1 && currentIdx < clips.length - 1) {
+              advancePlayAllRef.current();
+              return;
+            }
+            if (isLoopingRef.current && !hidden) {
               const audio = audioElRef.current;
               audio.currentTime = sliceRangeRef.current.start;
               setCurrentTime(sliceRangeRef.current.start);
@@ -391,6 +533,27 @@ export default function App() {
     }
   };
 
+  const maybeTranslateClips = (clipsToTranslate: SentenceClip[]) => {
+    if (aiTranslateEnabledRef.current && clipsToTranslate.length > 0) {
+      translateClipsWithAI(clipsToTranslate);
+    }
+  };
+
+  const handleToggleAiTranslate = (enabled: boolean) => {
+    aiTranslateEnabledRef.current = enabled;
+    setAiTranslateEnabled(enabled);
+    try {
+      localStorage.setItem(AI_TRANSLATE_STORAGE_KEY, enabled ? "1" : "0");
+    } catch {
+      /* ignore quota / private mode */
+    }
+    if (enabled && sentencesRef.current.length > 0) {
+      translateClipsWithAI(sentencesRef.current);
+    }
+  };
+
+  const englishPlaceholder = () => (aiTranslateEnabledRef.current ? "Translating..." : EMPTY_ENGLISH);
+
   // Auto-Detect Speech using Gemini STT API freely without transcript
   const handleAutoTranscribeSTT = async () => {
     if (!audioBuffer) return;
@@ -405,21 +568,23 @@ export default function App() {
       const data = await res.json();
 
       if (data.sentences && Array.isArray(data.sentences) && data.sentences.length > 0) {
-        const clips: SentenceClip[] = data.sentences.map((s: any, idx: number) => ({
+        const rawClips: SentenceClip[] = data.sentences.map((s: any, idx: number) => ({
           id: `stt-${idx}`,
           index: idx,
           frenchText: s.frenchText || `Phrase #${idx + 1}`,
-          englishTranslation: s.englishTranslation || "",
+          englishTranslation: s.englishTranslation || englishPlaceholder(),
           startTime: Number((s.startTime || idx * 4).toFixed(2)),
           endTime: Number((s.endTime || (idx + 1) * 4).toFixed(2)),
           showFrench: true,
           showEnglish: true,
         }));
+        const clips = mergeContinuationClips(rawClips);
 
         setSentences(clips);
         setCurrentTranscript(clips.map((c) => c.frenchText).join("\n"));
         if (clips.length > 0) {
           handleSelectSentence(0, false);
+          maybeTranslateClips(clips);
         }
       } else {
         handleAutoAlignSentences();
@@ -475,10 +640,14 @@ export default function App() {
     if (!audioBuffer) return;
 
     const pauseSegments = detectPauseSegments(audioBuffer);
-    const rawLines = currentTranscript
-      .split(/\n+/)
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
+    const localSentences = splitFrenchSentences(currentTranscript);
+    const rawLines =
+      localSentences.length > 0
+        ? localSentences
+        : currentTranscript
+            .split(/\n+/)
+            .map((l) => l.trim())
+            .filter((l) => l.length > 0);
 
     // If transcript has specific sentences, limit alignment to those sentences
     const itemsCount = rawLines.length > 0 ? rawLines.length : pauseSegments.length;
@@ -500,7 +669,7 @@ export default function App() {
         id: `aligned-${idx}`,
         index: idx,
         frenchText: rawLines[idx] || sentences[idx]?.frenchText || `Phrase #${idx + 1}`,
-        englishTranslation: sentences[idx]?.englishTranslation || "Translating...",
+        englishTranslation: sentences[idx]?.englishTranslation || englishPlaceholder(),
         startTime,
         endTime,
         showFrench: true,
@@ -508,14 +677,18 @@ export default function App() {
       };
     });
 
-    setSentences(aligned);
-    if (aligned.length > 0) {
+    const mergedAligned = mergeContinuationClips(aligned);
+    setSentences(mergedAligned);
+    if (mergedAligned.length > 0) {
       handleSelectSentence(0, false);
-      translateClipsWithAI(aligned);
+      maybeTranslateClips(mergedAligned);
     }
   };
 
   const handleAutoParseTranscriptAI = async (rawText: string): Promise<string[]> => {
+    const local = splitFrenchSentences(rawText);
+    if (local.length > 0) return local;
+
     try {
       const res = await fetch("/api/parse-transcript", {
         method: "POST",
@@ -545,7 +718,9 @@ export default function App() {
             ...sentences[idx],
             index: idx,
             frenchText: textLine,
-            englishTranslation: "Translating...",
+            englishTranslation: aiTranslateEnabledRef.current
+              ? "Translating..."
+              : sentences[idx].englishTranslation || EMPTY_ENGLISH,
           };
         } else {
           // If transcript has extra lines beyond existing clips, append after last clip
@@ -556,7 +731,7 @@ export default function App() {
             id: `parsed-extra-${idx}`,
             index: idx,
             frenchText: textLine,
-            englishTranslation: "Translating...",
+            englishTranslation: englishPlaceholder(),
             startTime,
             endTime,
             showFrench: true,
@@ -585,7 +760,7 @@ export default function App() {
             id: `aligned-ai-${idx}`,
             index: idx,
             frenchText: s.frenchText || parsedSentences[idx] || `Phrase #${idx + 1}`,
-            englishTranslation: s.englishTranslation || "Translating...",
+            englishTranslation: s.englishTranslation || englishPlaceholder(),
             startTime: Number(Math.max(0, s.startTime || 0).toFixed(2)),
             endTime: Number(Math.min(duration || 999, s.endTime || ((s.startTime || 0) + 4)).toFixed(2)),
             showFrench: true,
@@ -619,7 +794,7 @@ export default function App() {
             id: `parsed-${idx}`,
             index: idx,
             frenchText: textLine,
-            englishTranslation: "Translating...",
+            englishTranslation: englishPlaceholder(),
             startTime,
             endTime,
             showFrench: true,
@@ -634,7 +809,7 @@ export default function App() {
         id: `parsed-${idx}`,
         index: idx,
         frenchText: textLine,
-        englishTranslation: "Translating...",
+        englishTranslation: englishPlaceholder(),
         startTime: Number((idx * segDuration).toFixed(2)),
         endTime: Number(((idx + 1) * segDuration).toFixed(2)),
         showFrench: true,
@@ -642,10 +817,11 @@ export default function App() {
       }));
     }
 
+    newClips = mergeContinuationClips(newClips);
     setSentences(newClips);
     if (newClips.length > 0) {
       handleSelectSentence(0, false);
-      translateClipsWithAI(newClips);
+      maybeTranslateClips(newClips);
     }
   };
 
@@ -689,7 +865,7 @@ export default function App() {
       id: `manual-${Date.now()}`,
       index: sentences.length,
       frenchText: "Nouvelle phrase en français...",
-      englishTranslation: "New French sentence...",
+      englishTranslation: EMPTY_ENGLISH,
       startTime: Number(newStart.toFixed(2)),
       endTime: Number(newEnd.toFixed(2)),
       showFrench: true,
@@ -803,12 +979,14 @@ export default function App() {
         {/* Main Grid: Sentences Practice Column & Control Column */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1 min-h-0 lg:overflow-hidden">
           {/* Left Column: Interactive Sentence Practice List */}
-          <div className="lg:col-span-8 flex flex-col min-h-[50vh] lg:min-h-0 overflow-hidden">
+          <div className="lg:col-span-8 flex flex-col min-h-[280px] lg:min-h-0 overflow-hidden">
             <SentenceList
               sentences={sentences}
               activeSentenceIndex={activeSentenceIndex}
               isPlaying={isPlaying}
               isLooping={isLooping}
+              aiTranslateEnabled={aiTranslateEnabled}
+              onToggleAiTranslate={handleToggleAiTranslate}
               onSelectSentence={handleSelectSentence}
               onToggleFrench={handleToggleFrench}
               onToggleEnglish={handleToggleEnglish}
@@ -821,7 +999,7 @@ export default function App() {
           </div>
 
           {/* Right Column: Loop Mode Status & Transcript / STT Uploader */}
-          <div className="lg:col-span-4 flex flex-col min-h-[280px] lg:min-h-0 space-y-3 overflow-hidden">
+          <div className="lg:col-span-4 flex flex-col min-h-[320px] lg:min-h-0 space-y-3 overflow-hidden">
             {/* Playback Loop Mode Card */}
             <div className="bg-[#141417] border border-white/5 p-3.5 rounded-xl space-y-2 shrink-0">
               <div className="flex items-center justify-between text-xs font-bold uppercase tracking-widest">
@@ -841,7 +1019,7 @@ export default function App() {
             </div>
 
             {/* Transcript Uploader / STT Auto-Detect */}
-            <div className="flex-1 min-h-[220px] lg:min-h-0 flex flex-col overflow-hidden">
+            <div className="flex-1 min-h-[260px] lg:min-h-0 flex flex-col overflow-hidden">
               <TranscriptUploader
                 currentTranscript={currentTranscript}
                 onUpdateTranscript={handleUpdateTranscript}

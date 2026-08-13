@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { FileText, Sparkles, Upload, Check, Mic } from "lucide-react";
+import { splitFrenchSentences } from "../utils/frenchSegments";
 
 interface TranscriptUploaderProps {
   currentTranscript: string;
@@ -29,17 +30,25 @@ export const TranscriptUploader: React.FC<TranscriptUploaderProps> = ({
 
     setIsParsing(true);
     try {
-      const parsedSentences = await onAutoParseAI(text);
+      let parsedSentences = splitFrenchSentences(text);
+      if (parsedSentences.length === 0) {
+        parsedSentences = await onAutoParseAI(text);
+      }
       onUpdateTranscript(text, parsedSentences);
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 2000);
     } catch (err) {
       // Fallback simple line split
-      const simpleSplit = text
-        .split(/\n+|\./)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
-      onUpdateTranscript(text, simpleSplit);
+      const simpleSplit = splitFrenchSentences(text);
+      onUpdateTranscript(
+        text,
+        simpleSplit.length > 0
+          ? simpleSplit
+          : text
+              .split(/\n+|\./)
+              .map((s) => s.trim())
+              .filter((s) => s.length > 0)
+      );
     } finally {
       setIsParsing(false);
     }
@@ -84,7 +93,7 @@ export const TranscriptUploader: React.FC<TranscriptUploaderProps> = ({
         className="w-full bg-[#0A0A0B] border border-white/10 rounded-lg p-2.5 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-[#D4AF37]/60 font-sans leading-relaxed flex-1 min-h-[70px] resize-none overflow-y-auto"
       />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 shrink-0">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 shrink-0 sticky bottom-0 z-10 bg-[#141417] -mx-3.5 px-3.5 pb-0.5">
         {onAutoTranscribeSTT ? (
           <button
             onClick={onAutoTranscribeSTT}
