@@ -127,7 +127,7 @@ export const TranscriptUploader: React.FC<TranscriptUploaderProps> = ({
   };
 
   return (
-    <div className="w-full h-full bg-[#141417] border border-white/5 rounded-xl p-3.5 shadow-xl flex flex-col min-h-[260px] space-y-3">
+    <div className="w-full h-full bg-[#141417] border border-white/5 rounded-xl p-3.5 shadow-xl flex flex-col min-h-0 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2 shrink-0">
         <div>
           <h3 className="text-xs uppercase tracking-[0.2em] font-bold text-white/70 flex items-center gap-2">
@@ -175,7 +175,7 @@ export const TranscriptUploader: React.FC<TranscriptUploaderProps> = ({
             onClick={onAutoTranscribeSTT}
             disabled={isTranscribingSTT}
             className="flex-1 flex items-center justify-center gap-1.5 px-3 py-3 sm:py-2.5 bg-white/5 hover:bg-white/10 border border-[#D4AF37]/30 text-[#D4AF37] font-semibold rounded-lg text-xs sm:text-[11px] uppercase tracking-wider transition-colors disabled:opacity-50 min-h-11"
-            title="Auto-detect speech from audio and create segments without needing AI translation"
+            title="Play uploaded audio and transcribe with browser French STT (Chrome/Edge)"
           >
             {isTranscribingSTT ? (
               <>

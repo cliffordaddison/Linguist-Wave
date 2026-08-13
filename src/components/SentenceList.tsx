@@ -344,7 +344,7 @@ export const SentenceList: React.FC<SentenceListProps> = ({
           <BookOpen className="w-8 h-8 text-[#D4AF37]/50 mx-auto" />
           <h3 className="text-sm font-semibold text-white/80">No Practice Clips Loaded</h3>
           <p className="text-xs text-white/40 max-w-md mx-auto">
-            Upload an audio file in the top bar, then use <span className="text-[#D4AF37] font-semibold">Auto-Detect Speech (AI STT)</span> or paste a French transcript and tap <span className="text-[#D4AF37] font-semibold">Sync Transcript</span> in the transcript panel.
+            Upload an audio file in the top bar, then use <span className="text-[#D4AF37] font-semibold">Transcribe Audio</span> or paste a French transcript and tap <span className="text-[#D4AF37] font-semibold">Sync Transcript</span> in the Transcript & STT panel.
           </p>
         </div>
       )}

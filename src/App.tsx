@@ -5,14 +5,14 @@ import {
   extractWaveformPeaks,
   detectPauseSegments,
   audioBufferToBase64Wav,
-  sliceAudioBuffer,
 } from "./utils/audioUtils";
 import { splitFrenchSentences, mergeContinuationClips } from "./utils/frenchSegments";
+import { getSpeechRecognitionCtor } from "./utils/webSpeechStt";
 import { WaveformDisplay } from "./components/WaveformDisplay";
 import { AudioControlBar } from "./components/AudioControlBar";
 import { SentenceList } from "./components/SentenceList";
 import { TranscriptUploader } from "./components/TranscriptUploader";
-import { UploadCloud, Cpu, Loader2, CheckCircle2 } from "lucide-react";
+import { UploadCloud, Mic, Loader2, Square } from "lucide-react";
 
 const EMPTY_ENGLISH = "—";
 const AI_TRANSLATE_STORAGE_KEY = "lw-ai-translate";
@@ -48,6 +48,9 @@ export default function App() {
 
   // Loading & STT states
   const [isTranscribingSTT, setIsTranscribingSTT] = useState<boolean>(false);
+  const [isInternalSTTTranscribing, setIsInternalSTTTranscribing] = useState<boolean>(false);
+  const [sttProgressStatus, setSttProgressStatus] = useState<string>("");
+  const [mobileTab, setMobileTab] = useState<"practice" | "transcript">("practice");
 
   // Pitch-preserving HTMLAudioElement transport (keeps AudioBuffer for analysis only)
   const audioElRef = useRef<HTMLAudioElement | null>(null);
@@ -66,6 +69,9 @@ export default function App() {
   const aiTranslateEnabledRef = useRef<boolean>(aiTranslateEnabled);
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
   const documentHiddenRef = useRef<boolean>(typeof document !== "undefined" ? document.hidden : false);
+  const webSttAbortRef = useRef(false);
+  const webSttRecognitionRef = useRef<{ stop: () => void; abort?: () => void } | null>(null);
+  const isWebSttPlayingRef = useRef(false);
 
   const isLoopingRef = useRef<boolean>(isLooping);
   useEffect(() => {
@@ -105,7 +111,24 @@ export default function App() {
     setIsPlayingAll(false);
   }, []);
 
+  const abortWebSttSession = useCallback(() => {
+    webSttAbortRef.current = true;
+    isWebSttPlayingRef.current = false;
+    const rec = webSttRecognitionRef.current;
+    webSttRecognitionRef.current = null;
+    if (!rec) return;
+    try {
+      if (typeof rec.abort === "function") rec.abort();
+      else rec.stop();
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const stopAudio = useCallback(() => {
+    if (isWebSttPlayingRef.current) {
+      abortWebSttSession();
+    }
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
       animFrameRef.current = null;
@@ -117,7 +140,7 @@ export default function App() {
     isPlayingRef.current = false;
     setIsPlaying(false);
     clearPlayAll();
-  }, [clearPlayAll]);
+  }, [abortWebSttSession, clearPlayAll]);
 
   const playAudioRange = useCallback(
     (startSec: number, endSec: number) => {
@@ -542,117 +565,6 @@ export default function App() {
 
   const englishPlaceholder = () => (aiTranslateEnabledRef.current ? "Translating..." : EMPTY_ENGLISH);
 
-  // Auto-Detect Speech using Gemini STT API directly on the uploaded audio buffer
-  const handleAutoTranscribeSTT = async (bufferToTranscribe?: AudioBuffer) => {
-    const targetBuffer = bufferToTranscribe || audioBuffer;
-    if (!targetBuffer) return;
-    setIsTranscribingSTT(true);
-    try {
-      const base64Wav = audioBufferToBase64Wav(targetBuffer);
-      const res = await fetch("/api/transcribe-audio", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ audioBase64: base64Wav, mimeType: "audio/wav" }),
-      });
-      const data = await res.json();
-
-      if (data.sentences && Array.isArray(data.sentences) && data.sentences.length > 0) {
-        const rawClips: SentenceClip[] = data.sentences.map((s: any, idx: number) => ({
-          id: `stt-${idx}`,
-          index: idx,
-          frenchText: s.frenchText || `Phrase #${idx + 1}`,
-          englishTranslation: aiTranslateEnabledRef.current ? (s.englishTranslation || "Translating...") : EMPTY_ENGLISH,
-          startTime: Number((s.startTime || idx * 4).toFixed(2)),
-          endTime: Number((s.endTime || (idx + 1) * 4).toFixed(2)),
-          showFrench: true,
-          showEnglish: true,
-        }));
-        const clips = mergeContinuationClips(rawClips);
-
-        setSentences(clips);
-        setCurrentTranscript(clips.map((c) => c.frenchText).join("\n"));
-        if (clips.length > 0) {
-          handleSelectSentence(0, false);
-          maybeTranslateClips(clips);
-        }
-      } else {
-        handleAutoAlignSentences(targetBuffer);
-      }
-    } catch (err) {
-      console.error("STT Error:", err);
-      handleAutoAlignSentences(targetBuffer);
-    } finally {
-      setIsTranscribingSTT(false);
-    }
-  };
-
-  // Internal Background Audio STT (processes full audio in 1 single request to avoid rate limits)
-  const [isInternalSTTTranscribing, setIsInternalSTTTranscribing] = useState<boolean>(false);
-  const [sttProgressStatus, setSttProgressStatus] = useState<string>("");
-
-  const handleRunInternalAudioSTT = async () => {
-    if (!audioBuffer || sentences.length === 0) {
-      alert("Please upload an audio file first.");
-      return;
-    }
-
-    setIsInternalSTTTranscribing(true);
-    setSttProgressStatus("Transcribing audio file...");
-
-    try {
-      const fullWavBase64 = audioBufferToBase64Wav(audioBuffer);
-
-      const res = await fetch("/api/transcribe-full-audio-segments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          audioBase64: fullWavBase64,
-          mimeType: "audio/wav",
-          targetCount: sentences.length,
-        }),
-      });
-
-      if (res.status === 429) {
-        alert("API rate limit reached. Please wait ~30 seconds before clicking Transcribe again.");
-        return;
-      }
-
-      if (res.ok) {
-        const data = await res.json();
-        const transcripts: { frenchText: string; englishTranslation: string }[] = data.transcripts || [];
-
-        if (transcripts.length > 0) {
-          const updatedSentences = sentences.map((clip, idx) => {
-            if (idx < transcripts.length) {
-              return {
-                ...clip,
-                frenchText: transcripts[idx].frenchText || clip.frenchText,
-                englishTranslation:
-                  transcripts[idx].englishTranslation || clip.englishTranslation || EMPTY_ENGLISH,
-              };
-            }
-            return clip;
-          });
-
-          setSentences(updatedSentences);
-
-          const fullScript = transcripts
-            .map((item) => item.frenchText)
-            .filter(Boolean)
-            .join("\n\n");
-          if (fullScript) {
-            setCurrentTranscript(fullScript);
-          }
-        }
-      }
-    } catch (err) {
-      console.error("Internal Audio STT Error:", err);
-    } finally {
-      setIsInternalSTTTranscribing(false);
-      setSttProgressStatus("");
-    }
-  };
-
   // Select a specific sentence card to practice
   const handleSelectSentence = (idx: number, autoPlay = true) => {
     if (idx < 0 || idx >= sentences.length) return;
@@ -735,11 +647,13 @@ export default function App() {
     });
 
     const mergedAligned = mergeContinuationClips(aligned);
+    sentencesRef.current = mergedAligned;
     setSentences(mergedAligned);
     if (mergedAligned.length > 0) {
       handleSelectSentence(0, false);
       maybeTranslateClips(mergedAligned);
     }
+    return mergedAligned;
   };
 
   const handleAutoParseTranscriptAI = async (rawText: string): Promise<string[]> => {
@@ -765,11 +679,12 @@ export default function App() {
     if (parsedSentences.length === 0) return;
 
     let newClips: SentenceClip[] = [];
+    const existingClips = sentencesRef.current;
 
     // IF USER HAS EXISTING CLIPS (e.g., long-pause audio segments):
-    if (sentences.length > 0) {
+    if (existingClips.length > 0) {
       // Map parsed French STT sentences into each respective segment clip
-      newClips = sentences.map((clip, idx) => ({
+      newClips = existingClips.map((clip, idx) => ({
         ...clip,
         frenchText: parsedSentences[idx] || clip.frenchText,
         englishTranslation:
@@ -779,8 +694,8 @@ export default function App() {
       }));
 
       // Append extra sentences if parsed STT output exceeds initial segment count
-      if (parsedSentences.length > sentences.length) {
-        for (let idx = sentences.length; idx < parsedSentences.length; idx++) {
+      if (parsedSentences.length > existingClips.length) {
+        for (let idx = existingClips.length; idx < parsedSentences.length; idx++) {
           const lastClip = newClips[newClips.length - 1];
           const startTime = Number((lastClip ? lastClip.endTime + 0.3 : 0).toFixed(2));
           const endTime = Number(Math.min(duration || 999, startTime + 3.5).toFixed(2));
@@ -875,11 +790,190 @@ export default function App() {
     }
 
     newClips = mergeContinuationClips(newClips);
+    sentencesRef.current = newClips;
     setSentences(newClips);
     if (newClips.length > 0) {
       handleSelectSentence(0, false);
       maybeTranslateClips(newClips);
     }
+  };
+
+  const handleRunInternalAudioSTT = async () => {
+    if (isInternalSTTTranscribing || isWebSttPlayingRef.current) {
+      abortWebSttSession();
+      stopAudio();
+      setIsInternalSTTTranscribing(false);
+      setIsTranscribingSTT(false);
+      setSttProgressStatus("");
+      return;
+    }
+
+    if (!audioBuffer) {
+      alert("Please upload an audio file first.");
+      return;
+    }
+
+    const SpeechRecognition = getSpeechRecognitionCtor();
+    if (!SpeechRecognition) {
+      alert("Browser Speech Recognition is not available. Please use Chrome or Edge (desktop or Android).");
+      return;
+    }
+
+    const el = audioElRef.current;
+    if (!el || !el.src) {
+      alert("Audio player is not ready. Please re-upload the file.");
+      return;
+    }
+
+    if (sentencesRef.current.length === 0) {
+      handleAutoAlignSentences(audioBuffer);
+    }
+
+    webSttAbortRef.current = false;
+    clearPlayAll();
+    setIsInternalSTTTranscribing(true);
+    setIsTranscribingSTT(true);
+    setSttProgressStatus("Starting mic + playback...");
+
+    let finalTranscript = "";
+
+    const rec = new SpeechRecognition();
+    rec.lang = "fr-FR";
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+    webSttRecognitionRef.current = rec;
+
+    rec.onresult = (event: any) => {
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const piece = String(event.results[i][0]?.transcript || "").trim();
+        if (!piece) continue;
+        if (event.results[i].isFinal) {
+          finalTranscript = `${finalTranscript} ${piece}`.trim();
+        } else {
+          interim = interim ? `${interim} ${piece}` : piece;
+        }
+      }
+      const display = [finalTranscript, interim].filter(Boolean).join(" ");
+      if (display) {
+        setSttProgressStatus(display.length > 90 ? `…${display.slice(-90)}` : display);
+      }
+    };
+
+    rec.onerror = (event: any) => {
+      if (event?.error === "aborted" || event?.error === "no-speech") return;
+      console.warn("Web STT error:", event?.error || event);
+    };
+
+    rec.onend = () => {
+      if (isWebSttPlayingRef.current && !webSttAbortRef.current) {
+        try {
+          rec.start();
+        } catch {
+          /* already started */
+        }
+      }
+    };
+
+    try {
+      rec.start();
+    } catch {
+      webSttRecognitionRef.current = null;
+      setIsInternalSTTTranscribing(false);
+      setIsTranscribingSTT(false);
+      setSttProgressStatus("");
+      alert("Could not start browser STT. Allow microphone access and use Chrome or Edge.");
+      return;
+    }
+
+    isWebSttPlayingRef.current = true;
+    isPlayingRef.current = true;
+    setIsPlaying(true);
+    el.playbackRate = playbackRateRef.current;
+    el.volume = volumeRef.current;
+    el.currentTime = 0;
+    setCurrentTime(0);
+
+    try {
+      await el.play();
+    } catch {
+      abortWebSttSession();
+      isPlayingRef.current = false;
+      setIsPlaying(false);
+      setIsInternalSTTTranscribing(false);
+      setIsTranscribingSTT(false);
+      setSttProgressStatus("");
+      alert("Could not play audio for STT. Try again after interacting with the page.");
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearInterval(poll);
+        el.removeEventListener("ended", onEnded);
+        el.removeEventListener("timeupdate", onTime);
+        resolve();
+      };
+      const onEnded = () => finish();
+      const onTime = () => {
+        if (audioElRef.current) setCurrentTime(audioElRef.current.currentTime);
+      };
+      const poll = window.setInterval(() => {
+        const audio = audioElRef.current;
+        if (webSttAbortRef.current || !audio || audio.ended) {
+          finish();
+        }
+      }, 80);
+      el.addEventListener("ended", onEnded);
+      el.addEventListener("timeupdate", onTime);
+    });
+
+    isWebSttPlayingRef.current = false;
+    try {
+      rec.stop();
+    } catch {
+      /* ignore */
+    }
+    webSttRecognitionRef.current = null;
+
+    if (!el.paused) el.pause();
+    isPlayingRef.current = false;
+    setIsPlaying(false);
+
+    if (webSttAbortRef.current) {
+      setIsInternalSTTTranscribing(false);
+      setIsTranscribingSTT(false);
+      setSttProgressStatus("");
+      return;
+    }
+
+    await new Promise((r) => setTimeout(r, 450));
+
+    const raw = finalTranscript.trim();
+    if (!raw) {
+      alert("No speech was detected. Use speakers (not headphones), allow the microphone, and try Chrome or Edge.");
+      setIsInternalSTTTranscribing(false);
+      setIsTranscribingSTT(false);
+      setSttProgressStatus("");
+      return;
+    }
+
+    const parsed = splitFrenchSentences(raw);
+    try {
+      await handleUpdateTranscript(raw, parsed.length > 0 ? parsed : [raw]);
+    } finally {
+      setIsInternalSTTTranscribing(false);
+      setIsTranscribingSTT(false);
+      setSttProgressStatus("");
+    }
+  };
+
+  const handleAutoTranscribeSTT = () => {
+    void handleRunInternalAudioSTT();
   };
 
   // Toggles
@@ -994,10 +1088,37 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main workspace: scroll on phones/tablets, locked single viewport on lg+ */}
-      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-3 flex-1 flex flex-col min-h-0 space-y-3 overflow-y-auto lg:overflow-hidden overscroll-contain">
+      <nav className="lg:hidden shrink-0 border-b border-white/10 bg-[#0F0F11] z-20">
+        <div className="max-w-7xl mx-auto px-4 grid grid-cols-2 gap-1 py-1.5">
+          <button
+            type="button"
+            onClick={() => setMobileTab("practice")}
+            className={`min-h-11 rounded-md text-xs font-bold uppercase tracking-widest transition-colors ${
+              mobileTab === "practice"
+                ? "bg-[#D4AF37] text-black"
+                : "text-white/60 hover:text-white hover:bg-white/5"
+            }`}
+          >
+            Practice
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobileTab("transcript")}
+            className={`min-h-11 rounded-md text-xs font-bold uppercase tracking-widest transition-colors ${
+              mobileTab === "transcript"
+                ? "bg-[#D4AF37] text-black"
+                : "text-white/60 hover:text-white hover:bg-white/5"
+            }`}
+          >
+            Transcript & STT
+          </button>
+        </div>
+      </nav>
+
+      {/* Main workspace: tabbed fill-height on phones, locked two-column on lg+ */}
+      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-3 flex-1 flex flex-col min-h-0 space-y-3 overflow-hidden overscroll-contain">
         {/* Waveform Slicer Visualizer */}
-        <div className="shrink-0">
+        <div className={`shrink-0 ${mobileTab !== "practice" ? "hidden lg:block" : ""}`}>
           <WaveformDisplay
             waveformPeaks={waveformPeaks}
             duration={duration}
@@ -1012,7 +1133,7 @@ export default function App() {
         </div>
 
         {/* Audio Control Bar */}
-        <div className="shrink-0">
+        <div className={`shrink-0 ${mobileTab !== "practice" ? "hidden lg:block" : ""}`}>
           <AudioControlBar
             isPlaying={isPlaying}
             isLooping={isLooping}
@@ -1025,7 +1146,7 @@ export default function App() {
             onPlayAll={startPlayAll}
             onChangeSpeed={handleChangeSpeed}
             onChangeVolume={handleChangeVolume}
-            onAutoSegment={handleAutoAlignSentences}
+            onAutoSegment={() => handleAutoAlignSentences()}
             onPrevSentence={handlePrevSentence}
             onNextSentence={handleNextSentence}
             hasAudio={!!audioBuffer}
@@ -1034,9 +1155,13 @@ export default function App() {
         </div>
 
         {/* Main Grid: Sentences Practice Column & Control Column */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1 min-h-0 lg:overflow-hidden">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1 min-h-0 overflow-hidden">
           {/* Left Column: Interactive Sentence Practice List */}
-          <div className="lg:col-span-8 flex flex-col min-h-[280px] lg:min-h-0 overflow-hidden">
+          <div
+            className={`lg:col-span-8 flex-col min-h-0 overflow-hidden ${
+              mobileTab !== "practice" ? "hidden lg:flex" : "flex"
+            }`}
+          >
             <SentenceList
               sentences={sentences}
               activeSentenceIndex={activeSentenceIndex}
@@ -1055,42 +1180,49 @@ export default function App() {
             />
           </div>
 
-          {/* Right Column: Loop Mode Status & Transcript / STT Uploader */}
-          <div className="lg:col-span-4 flex flex-col min-h-[320px] lg:min-h-0 space-y-3 overflow-hidden">
-            {/* Internal Background Audio STT Card */}
+          {/* Right Column: Web STT Transcriber & Transcript Uploader */}
+          <div
+            className={`lg:col-span-4 flex-col min-h-0 space-y-3 overflow-hidden ${
+              mobileTab !== "transcript" ? "hidden lg:flex" : "flex"
+            }`}
+          >
             <div className="bg-[#141417] border border-white/5 p-3.5 rounded-xl space-y-2 shrink-0">
-              <div className="flex items-center justify-between text-xs font-bold uppercase tracking-widest">
+              <div className="flex items-center justify-between text-xs font-bold uppercase tracking-widest gap-2">
                 <span className="text-[#D4AF37]">Audio STT Transcriber</span>
-                <span className={isInternalSTTTranscribing ? "text-[#D4AF37] font-mono animate-pulse" : "text-white/40"}>
+                <span className={isInternalSTTTranscribing ? "text-[#D4AF37] font-mono animate-pulse text-[10px] truncate max-w-[55%]" : "text-white/40"}>
                   {isInternalSTTTranscribing ? `● ${sttProgressStatus}` : `${sentences.length} Segments`}
                 </span>
               </div>
+              <p className="text-[11px] text-white/40 leading-relaxed">
+                Plays the uploaded file and uses browser French STT (Chrome/Edge). Use speakers, not headphones. Tap again to cancel.
+              </p>
               <button
-                onClick={handleRunInternalAudioSTT}
-                disabled={isInternalSTTTranscribing || !audioBuffer}
-                className={`w-full py-2.5 sm:py-2.5 rounded-md text-xs font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:pointer-events-none ${
+                type="button"
+                onClick={() => void handleRunInternalAudioSTT()}
+                disabled={!audioBuffer && !isInternalSTTTranscribing}
+                className={`w-full py-2.5 rounded-md text-xs font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:pointer-events-none min-h-11 ${
                   isInternalSTTTranscribing
                     ? "bg-[#D4AF37]/20 border border-[#D4AF37]/50 text-[#D4AF37]"
                     : "bg-[#D4AF37] hover:bg-[#e2c154] text-black shadow-md"
                 }`}
-                title="Process uploaded audio file in the background and assign transcribed French text to each long-pause segment card"
+                title="Play uploaded audio and assign browser French STT text to pause segments"
               >
                 {isInternalSTTTranscribing ? (
                   <>
+                    <Square className="w-3.5 h-3.5 fill-current" />
                     <Loader2 className="w-4 h-4 animate-spin text-[#D4AF37]" />
-                    <span>Transcribing {sttProgressStatus}</span>
+                    <span>Stop STT</span>
                   </>
                 ) : (
                   <>
-                    <Cpu className="w-4 h-4" />
+                    <Mic className="w-4 h-4" />
                     <span>Transcribe Audio & Assign Sentences</span>
                   </>
                 )}
               </button>
             </div>
 
-            {/* Transcript Uploader / STT Auto-Detect */}
-            <div className="flex-1 min-h-[260px] lg:min-h-0 flex flex-col overflow-hidden">
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
               <TranscriptUploader
                 currentTranscript={currentTranscript}
                 onUpdateTranscript={handleUpdateTranscript}
